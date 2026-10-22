@@ -16,9 +16,9 @@ One binary, three names (symlinks), each mapping to a safety tier that reuses th
 |---|---|---|
 | `marik` | read, plan, and reversible apply: status, logs, stats, deploy with rollback, restart, publish/unpublish port | Refuses destructive operations with a hint to use `maurice` |
 | `maurice` | everything | Destructive operations print the plan and require interactive confirmation |
-| `maurice-odyssey-stella` | everything, non-interactive | Skips confirmation for scripted recovery; additionally requires `--yes-i-mean-it` or `MAURICE_FORCE=1`; every call is written to the audit log flagged as forced |
+| `maurice-odysseus-stella` | everything, non-interactive | Skips confirmation for scripted recovery; additionally requires `--yes-i-mean-it` or `MAURICE_FORCE=1`; every call is written to the audit log flagged as forced |
 
-The server unit is `maurice.service`. "Maurice Odyssey Stella" is the project's full name used in banners and documentation.
+The server unit is `maurice.service`. "Maurice Odysseus Stella" is the project's full name used in banners and documentation.
 
 An operation is classified as destructive when it deletes data or users, or cannot be undone from the panel: workspace delete, volume purge, secret delete, DB user drop, backup delete, user removal from the panel.
 
