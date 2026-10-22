@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Create (or manage) the local Fedora Server VM used to develop and test the
-# Maurice agent against real system users, rootless Podman and SELinux.
+# Create (or manage) the local VM used to develop and test the Maurice agent
+# against real system users and rootless Podman. Ubuntu 26.04 LTS by default
+# (the primary host, ADR-008); Fedora optional for SELinux compatibility checks.
 #
 # The VM is deliberately hard to delete by accident:
 #   - a distinctive name and a libvirt title/description marking it as protected
@@ -12,6 +13,7 @@
 #
 # Usage:
 #   scripts/dev-vm.sh create     # download image, create pool and VM, wait for SSH
+#   MAURICE_VM_DISTRO=fedora scripts/dev-vm.sh create   # second VM: maurice-dev-fedora
 #   scripts/dev-vm.sh ssh        # open a shell in the VM
 #   scripts/dev-vm.sh ip         # print the VM address
 #   scripts/dev-vm.sh stop       # graceful shutdown
@@ -19,8 +21,10 @@
 #   scripts/dev-vm.sh purge      # remove VM and disk (asks for confirmation)
 set -euo pipefail
 
-VM_NAME="${MAURICE_VM_NAME:-maurice-dev-fedora}"
+DISTRO="${MAURICE_VM_DISTRO:-ubuntu}"            # ubuntu | fedora
+UBUNTU_RELEASE="${MAURICE_UBUNTU_RELEASE:-26.04}"
 FEDORA_RELEASE="${MAURICE_FEDORA_RELEASE:-42}"
+VM_NAME="${MAURICE_VM_NAME:-maurice-dev-${DISTRO}}"
 VCPUS="${MAURICE_VM_VCPUS:-4}"
 RAM_MB="${MAURICE_VM_RAM_MB:-8192}"
 DISK_GB="${MAURICE_VM_DISK_GB:-40}"
@@ -38,12 +42,32 @@ die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1 (install libvirt-daemon-system virtinst qemu-system-x86)"; }
 
 resolve_image_url() {
-  # The exact qcow2 file name carries a build number, so read it from the directory listing.
-  local base="https://download.fedoraproject.org/pub/fedora/linux/releases/${FEDORA_RELEASE}/Cloud/x86_64/images/"
-  local name
-  name=$(curl -fsSL "$base" | grep -oE 'Fedora-Cloud-Base-Generic[^"]*x86_64\.qcow2' | head -1)
-  [ -n "$name" ] || die "could not find a Fedora ${FEDORA_RELEASE} cloud image at $base"
-  echo "${base}${name}"
+  case "$DISTRO" in
+    ubuntu)
+      echo "https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/ubuntu-${UBUNTU_RELEASE}-server-cloudimg-amd64.img" ;;
+    fedora)
+      # The exact qcow2 file name carries a build number, so read it from the directory listing.
+      local base="https://download.fedoraproject.org/pub/fedora/linux/releases/${FEDORA_RELEASE}/Cloud/x86_64/images/"
+      local name
+      name=$(curl -fsSL "$base" | grep -oE 'Fedora-Cloud-Base-Generic[^"]*x86_64\.qcow2' | head -1)
+      [ -n "$name" ] || die "could not find a Fedora ${FEDORA_RELEASE} cloud image at $base"
+      echo "${base}${name}" ;;
+    *) die "unknown MAURICE_VM_DISTRO: $DISTRO (ubuntu|fedora)" ;;
+  esac
+}
+
+osinfo_name() {
+  case "$DISTRO" in
+    ubuntu) echo "ubuntu${UBUNTU_RELEASE}" ;;
+    fedora) echo "fedora${FEDORA_RELEASE}" ;;
+  esac
+}
+
+distro_packages() {
+  case "$DISTRO" in
+    ubuntu) printf '  - %s\n' podman crun netavark aardvark-dns systemd-container uidmap slirp4netns passt apparmor-utils git rsync ;;
+    fedora) printf '  - %s\n' podman crun netavark aardvark-dns systemd-container policycoreutils-python-utils git rsync ;;
+  esac
 }
 
 write_cloud_init() {
@@ -61,14 +85,7 @@ users:
       - ${key}
 package_update: true
 packages:
-  - podman
-  - crun
-  - netavark
-  - aardvark-dns
-  - systemd-container
-  - policycoreutils-python-utils
-  - git
-  - rsync
+$(distro_packages)
 runcmd:
   - [ systemctl, enable, --now, podman.socket ]
   - [ sh, -c, "echo 'Maurice dev VM ready' > /etc/motd" ]
@@ -114,9 +131,9 @@ cmd_create() {
   echo "defining VM $VM_NAME"
   virt-install --connect "$CONNECT" \
     --name "$VM_NAME" \
-    --metadata title="Maurice PaaS dev VM" \
-    --metadata description="PROTECTED: development VM for the Maurice PaaS project (Fedora ${FEDORA_RELEASE}, Podman 5, SELinux). Do not delete from other projects. Managed by scripts/dev-vm.sh in the Maurice-PaaS repository." \
-    --osinfo "fedora${FEDORA_RELEASE}" \
+    --metadata title="Maurice PaaS dev VM (${DISTRO})" \
+    --metadata description="PROTECTED: development VM for the Maurice PaaS project (${DISTRO}, Podman 5). Do not delete from other projects. Managed by scripts/dev-vm.sh in the Maurice-PaaS repository." \
+    --osinfo "name=$(osinfo_name),detect=on,require=off" \
     --vcpus "$VCPUS" --memory "$RAM_MB" \
     --disk "path=$disk,format=qcow2,bus=virtio" \
     --cloud-init "user-data=$WORK_DIR/user-data,meta-data=$WORK_DIR/meta-data" \

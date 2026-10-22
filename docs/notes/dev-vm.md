@@ -1,6 +1,6 @@
 # Development VM
 
-The agent must be exercised against real system users, `systemd --user`, rootless Podman and SELinux. The development machine runs Ubuntu, so a Fedora Server VM under libvirt stands in for the target host (see ADR-003).
+The agent must be exercised against real system users, `systemd --user` and rootless Podman without touching the development machine's own users. A libvirt VM running Ubuntu 26.04 LTS stands in for the production host (ADR-008). A second, Fedora VM can be created for the SELinux path.
 
 ## One-time host setup
 
@@ -17,7 +17,7 @@ scripts/dev-vm.sh ssh
 scripts/dev-vm.sh status
 ```
 
-Defaults: name `maurice-dev-fedora`, Fedora 42 cloud image, 4 vCPU, 8 GB RAM, 40 GB disk, user `dev` with passwordless sudo, SSH key `~/.ssh/id_ed25519_kmaxx.pub`. Override with `MAURICE_VM_*` environment variables (see the script header).
+Defaults: name `maurice-dev-ubuntu`, Ubuntu 26.04 cloud image, 4 vCPU, 8 GB RAM, 40 GB disk, user `dev` with passwordless sudo, SSH key `~/.ssh/id_ed25519_kmaxx.pub`. Override with `MAURICE_VM_*` environment variables (see the script header). `MAURICE_VM_DISTRO=fedora scripts/dev-vm.sh create` adds `maurice-dev-fedora` next to it.
 
 ## Protection against accidental deletion
 
@@ -27,4 +27,4 @@ Defaults: name `maurice-dev-fedora`, Fedora 42 cloud image, 4 vCPU, 8 GB RAM, 40
 
 ## What the VM has after first boot
 
-Podman 5 with crun, netavark and aardvark-dns; `systemd-container` for `machinectl` and `systemd-run --machine`; SELinux enforcing (Fedora default); `podman.socket` enabled for the `dev` user. Workspace users are created by the agent during tests, not by cloud-init.
+Podman 5.7 with crun, netavark and aardvark-dns; `systemd-container` for `machinectl` and `systemd-run --machine`; AppArmor at the Ubuntu default (SELinux enforcing on the Fedora variant); `podman.socket` enabled for the `dev` user. Workspace users are created by the agent during tests, not by cloud-init.
