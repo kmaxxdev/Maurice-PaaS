@@ -1,6 +1,6 @@
 # ADR-003: Fedora-family host, SELinux-aware generation
 
-- **Status:** accepted
+- **Status:** superseded by [[008-ubuntu-lts-primary-host]]
 - **Date:** 2026-10-22
 - **Issue:** #4
 
