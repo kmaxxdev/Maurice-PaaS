@@ -30,6 +30,7 @@ RAM_MB="${MAURICE_VM_RAM_MB:-8192}"
 DISK_GB="${MAURICE_VM_DISK_GB:-40}"
 SSH_PUBKEY="${MAURICE_VM_SSH_PUBKEY:-$HOME/.ssh/id_ed25519_kmaxx.pub}"
 SSH_USER="dev"
+SSH_OPTS=(-i "${SSH_PUBKEY%.pub}" -o IdentitiesOnly=yes)
 POOL_NAME="maurice"
 POOL_DIR="/var/lib/libvirt/images/maurice"
 CONNECT="qemu:///system"
@@ -94,7 +95,9 @@ package_update: true
 packages:
 $(distro_packages)
 runcmd:
-  - [ systemctl, enable, --now, podman.socket ]
+  # Keep the dev user's systemd --user alive without a login so its podman.socket can run.
+  - [ loginctl, enable-linger, ${SSH_USER} ]
+  - [ sh, -c, "sleep 2; systemctl --user -M ${SSH_USER}@ enable --now podman.socket || true" ]
   - [ sh, -c, "echo 'Maurice dev VM ready' > /etc/motd" ]
 CLOUD
   cat > "$WORK_DIR/meta-data" <<META
@@ -157,7 +160,7 @@ cmd_create() {
   [ -n "$ip" ] || die "VM has no IP yet; try '$0 ip' in a minute"
   echo "waiting for cloud-init to finish (packages install on first boot)"
   for _ in $(seq 1 90); do
-    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o BatchMode=yes "$SSH_USER@$ip" 'cloud-init status --wait >/dev/null 2>&1 && podman --version' 2>/dev/null; then
+    if ssh "${SSH_OPTS[@]}" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o BatchMode=yes "$SSH_USER@$ip" 'cloud-init status --wait >/dev/null 2>&1 && podman --version' 2>/dev/null; then
       echo "ready: ssh $SSH_USER@$ip   (or: $0 ssh)"
       return 0
     fi
@@ -170,7 +173,7 @@ cmd_ip() {
   virsh domifaddr "$VM_NAME" --source lease 2>/dev/null | awk '/ipv4/ {split($4,a,"/"); print a[1]; exit}'
 }
 
-cmd_ssh() { local ip; ip=$(cmd_ip); [ -n "$ip" ] || die "no IP; is the VM running?"; exec ssh "$SSH_USER@$ip" "${@}"; }
+cmd_ssh() { local ip; ip=$(cmd_ip); [ -n "$ip" ] || die "no IP; is the VM running?"; exec ssh "${SSH_OPTS[@]}" "$SSH_USER@$ip" "${@}"; }
 cmd_start() { virsh start "$VM_NAME"; }
 cmd_stop() { virsh shutdown "$VM_NAME"; }
 cmd_status() { virsh dominfo "$VM_NAME"; echo; echo "ip: $(cmd_ip || echo none)"; }
