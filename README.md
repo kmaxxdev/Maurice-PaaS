@@ -71,10 +71,11 @@ Scope, done criteria and risks for every stage are in the
 
 ## Stack
 
-Go for the control plane and agent (proposed, see [Open Decisions](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Open-Decisions)) · Podman 5 with crun, netavark and
-aardvark-dns · systemd + Quadlet · Caddy · PostgreSQL · SolidStart UI ·
-VictoriaMetrics and VictoriaLogs · restic + rclone · Fedora Server or a RHEL-like
-host. Details and reasoning in the
+Rust for the control plane and agent, one static binary · Podman 5 with crun,
+netavark and aardvark-dns · systemd + Quadlet · PostgreSQL · ConnectRPC API ·
+SolidJS SPA embedded in the binary · Caddy · VictoriaMetrics and VictoriaLogs ·
+restic + rclone · Fedora Server host, Debian 13 as second target. Every choice
+has a record in [`docs/decisions/`](docs/decisions/) and the reasoning in the
 [Technology Stack](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Technology-Stack).
 
 ## Learn more
