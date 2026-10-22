@@ -57,10 +57,17 @@ resolve_image_url() {
 }
 
 osinfo_name() {
+  # osinfo-db on the host may lag behind the release we install; it only sets
+  # virtual hardware defaults, so fall back to the newest entry it does know.
+  local want dir prefix
   case "$DISTRO" in
-    ubuntu) echo "ubuntu${UBUNTU_RELEASE}" ;;
-    fedora) echo "fedora${FEDORA_RELEASE}" ;;
+    ubuntu) want="ubuntu${UBUNTU_RELEASE}"; dir=/usr/share/osinfo/os/ubuntu.com; prefix=ubuntu- ;;
+    fedora) want="fedora${FEDORA_RELEASE}"; dir=/usr/share/osinfo/os/fedoraproject.org; prefix=fedora- ;;
   esac
+  if [ -f "$dir/${prefix}${want#"$DISTRO"}.xml" ]; then echo "$want"; return; fi
+  local newest
+  newest=$(ls "$dir"/${prefix}[0-9]*.xml 2>/dev/null | sed -E "s|.*/${prefix}([0-9.]+)\.xml|\1|" | sort -V | tail -1)
+  [ -n "$newest" ] && echo "${DISTRO}${newest}" || echo "generic"
 }
 
 distro_packages() {
