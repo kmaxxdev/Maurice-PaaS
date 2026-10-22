@@ -6,6 +6,7 @@
       "repo": "kmaxxdev/Maurice-PaaS-Checkpoints"
     }
   },
+  "telemetry": false,
   "checkpoints": {
     "primary": {
       "type": "git-refs"
