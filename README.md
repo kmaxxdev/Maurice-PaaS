@@ -9,7 +9,7 @@ underneath. It is built around what Podman does well: rootless isolation by Unix
 user, Quadlet and systemd as the lifecycle environment, built-in auto-update with
 rollback, native secrets and pods.
 
-> Status: **pre-alpha, planning**. This README is the project plan and roadmap.
+> License: Apache 2.0 · Status: **pre-alpha, planning**. This README is the project plan and roadmap.
 > It will be updated as decisions are made and stages are completed.
 
 ---
