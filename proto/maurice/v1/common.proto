@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Workspace environment. Prod workspaces never accept apply from non-human tokens.
+enum Env {
+  ENV_UNSPECIFIED = 0;
+  ENV_PROD = 1;
+  ENV_DEV = 2;
+}
+
+// Deploy strategy follows from the kind: stateless services roll blue-green,
+// stateful services restart in place and are backed up.
+enum ServiceKind {
+  SERVICE_KIND_UNSPECIFIED = 0;
+  SERVICE_KIND_STATELESS = 1;
+  SERVICE_KIND_STATEFUL = 2;
+}
+
+// What a token (or a CLI tier) is allowed to do.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  SCOPE_READ = 1;
+  SCOPE_PLAN = 2;
+  SCOPE_APPLY = 3;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_WARNING = 2;
+  // Errors block apply.
+  SEVERITY_ERROR = 3;
+}
+
+message Empty {}
+
+// A validator result attached to a plan.
+message Finding {
+  Severity severity = 1;
+  // Stable machine-readable code, e.g. "env.unresolved_ref", "port.conflict".
+  string code = 2;
+  string message = 3;
+  // Where the finding points: "service:web", "env:DATABASE_URL", "port:8080".
+  string target = 4;
+}
+
+// One change a plan will make when applied.
+message PlannedChange {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_CREATE_USER = 1;
+    KIND_DELETE_USER = 2;
+    KIND_WRITE_UNIT = 3;
+    KIND_REMOVE_UNIT = 4;
+    KIND_START_UNIT = 5;
+    KIND_STOP_UNIT = 6;
+    KIND_RESTART_UNIT = 7;
+    KIND_PUBLISH_PORT = 8;
+    KIND_UNPUBLISH_PORT = 9;
+    KIND_SET_SECRET = 10;
+  }
+  Kind kind = 1;
+  // Human-readable target, e.g. "ws-shop/web.container".
+  string target = 2;
+  // Unified diff of the unit file for WRITE_UNIT, empty otherwise.
+  string diff = 3;
+  bool destructive = 4;
+}
+
+message Plan {
+  string id = 1;
+  string workspace_id = 2;
+  repeated PlannedChange changes = 3;
+  repeated Finding findings = 4;
+  // True if any change is destructive: marik refuses, maurice asks to confirm.
+  bool destructive = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}

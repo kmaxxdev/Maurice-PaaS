@@ -1,0 +1,11 @@
+{
+  "name": "maurice-paas",
+  "private": true,
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "dev": "pnpm --filter @maurice/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "proto": "buf generate --template proto/buf.gen.ts.yaml proto"
+  }
+}

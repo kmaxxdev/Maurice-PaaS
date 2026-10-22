@@ -1,0 +1,100 @@
+{
+  "name": "shop",
+  "unix_user": "ws-shop",
+  "uid": 60001,
+  "subuid_start": 1000000,
+  "subuid_len": 65536,
+  "home": "/srv/ws/shop",
+  "env": "dev",
+  "cpu_slice": null,
+  "projects": [
+    {
+      "name": "storefront",
+      "git_repo": "git@github.com:example/storefront.git",
+      "services": [
+        {
+          "name": "web",
+          "kind": "stateless",
+          "source": {
+            "build": {
+              "dockerfile": "Dockerfile",
+              "context": "."
+            }
+          },
+          "ports": [
+            {
+              "container_port": 3000,
+              "published": {
+                "host_ip": "127.0.0.1",
+                "host_port": 13000
+              }
+            }
+          ],
+          "env": [
+            {
+              "key": "NODE_ENV",
+              "value": {
+                "literal": "production"
+              }
+            },
+            {
+              "key": "DATABASE_URL",
+              "value": {
+                "ref": "{{postgres.url}}"
+              }
+            },
+            {
+              "key": "SESSION_SECRET",
+              "value": {
+                "secret": "web_session_secret"
+              }
+            }
+          ],
+          "volumes": [],
+          "resources": {
+            "cpu": 1.0,
+            "memory": 536870912
+          },
+          "isolated": false,
+          "health_cmd": "curl -fsS http://localhost:3000/health"
+        },
+        {
+          "name": "postgres",
+          "kind": "stateful",
+          "source": {
+            "image": {
+              "reference": "docker.io/library/postgres:16"
+            }
+          },
+          "ports": [
+            {
+              "container_port": 5432,
+              "published": null
+            }
+          ],
+          "env": [
+            {
+              "key": "POSTGRES_PASSWORD",
+              "value": {
+                "secret": "pg_admin"
+              }
+            }
+          ],
+          "volumes": [
+            {
+              "source": "data",
+              "target": "/var/lib/postgresql/data",
+              "read_only": false
+            }
+          ],
+          "resources": {
+            "cpu": null,
+            "memory": null
+          },
+          "isolated": false,
+          "health_cmd": "pg_isready -U postgres"
+        }
+      ]
+    }
+  ]
+}

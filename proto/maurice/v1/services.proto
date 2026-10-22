@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "google/protobuf/timestamp.proto";
+import "maurice/v1/common.proto";
+
+message Port {
+  uint32 container_port = 1;
+  // Nothing is reachable from outside the workspace network unless published.
+  bool published = 2;
+  // Host IP to bind when published; defaults to 127.0.0.1.
+  string host_ip = 3;
+  uint32 host_port = 4;
+}
+
+message EnvVar {
+  string key = 1;
+  oneof value {
+    string literal = 2;
+    // Reference resolved by the panel, e.g. "{{postgres.url}}".
+    string ref = 3;
+    // Delivered through podman secret; only the name is ever written to disk.
+    string secret_name = 4;
+  }
+}
+
+message Service {
+  string id = 1;
+  string project_id = 2;
+  // Stable network alias inside the workspace.
+  string name = 3;
+  ServiceKind kind = 4;
+  oneof source {
+    string image_ref = 5;
+    string dockerfile_path = 6;
+  }
+  repeated Port ports = 7;
+  repeated EnvVar env = 8;
+  // Fractional cores, 0 = unlimited.
+  double cpu = 9;
+  // Bytes, 0 = unlimited.
+  uint64 memory = 10;
+  bool isolated = 11;
+}
+
+message UnitFile {
+  // Path on disk inside the workspace user's quadlet directory.
+  string path = 1;
+  string content = 2;
+  // Deployment that produced this unit, if known.
+  string deployment_id = 3;
+}
+
+message LogLine {
+  google.protobuf.Timestamp time = 1;
+  string unit = 2;
+  string message = 3;
+  // journald PRIORITY 0..7
+  uint32 priority = 4;
+}
+
+message StatsSample {
+  google.protobuf.Timestamp time = 1;
+  double cpu_cores = 2;
+  uint64 memory_bytes = 3;
+  uint64 net_rx_bytes = 4;
+  uint64 net_tx_bytes = 5;
+}
+
+message ListServicesRequest {
+  string workspace_id = 1;
+}
+message ListServicesResponse {
+  repeated Service services = 1;
+}
+message GetServiceRequest {
+  string id = 1;
+}
+message GetUnitRequest {
+  string service_id = 1;
+}
+message LogsRequest {
+  string service_id = 1;
+  bool follow = 2;
+  uint32 tail = 3;
+}
+message StatsRequest {
+  string service_id = 1;
+}
+message PlanDeployRequest {
+  string service_id = 1;
+  // Image digest or git sha to deploy; empty = latest known.
+  string version = 2;
+}
+message PlanEnvChangeRequest {
+  string service_id = 1;
+  repeated EnvVar set = 2;
+  repeated string unset = 3;
+}
+message PlanPublishPortRequest {
+  string service_id = 1;
+  uint32 container_port = 2;
+  string host_ip = 3;
+  uint32 host_port = 4;
+}
+message PlanDeleteServiceRequest {
+  string id = 1;
+  bool purge_volumes = 2;
+}
+message RestartRequest {
+  string service_id = 1;
+}
+message StopRequest {
+  string service_id = 1;
+}
+
+service Services {
+  // scope: read
+  rpc List(ListServicesRequest) returns (ListServicesResponse);
+  rpc Get(GetServiceRequest) returns (Service);
+  rpc GetUnit(GetUnitRequest) returns (UnitFile);
+  rpc Logs(LogsRequest) returns (stream LogLine);
+  rpc Stats(StatsRequest) returns (stream StatsSample);
+  // scope: plan
+  rpc PlanDeploy(PlanDeployRequest) returns (Plan);
+  rpc PlanEnvChange(PlanEnvChangeRequest) returns (Plan);
+  rpc PlanPublishPort(PlanPublishPortRequest) returns (Plan);
+  rpc PlanDelete(PlanDeleteServiceRequest) returns (Plan);
+  // scope: apply, reversible: allowed to marik
+  rpc Restart(RestartRequest) returns (Empty);
+  rpc Stop(StopRequest) returns (Empty);
+}

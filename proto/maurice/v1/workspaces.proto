@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "maurice/v1/common.proto";
+
+message Workspace {
+  string id = 1;
+  string name = 2;
+  string unix_user = 3;
+  uint32 uid = 4;
+  uint32 subuid_start = 5;
+  uint32 subuid_len = 6;
+  string home = 7;
+  Env env = 8;
+  string cpu_slice = 9;
+}
+
+message ListWorkspacesRequest {}
+message ListWorkspacesResponse {
+  repeated Workspace workspaces = 1;
+}
+message GetWorkspaceRequest {
+  string id = 1;
+}
+message PlanCreateWorkspaceRequest {
+  string name = 1;
+  Env env = 2;
+}
+message PlanDeleteWorkspaceRequest {
+  string id = 1;
+  // Also remove the home directory and volumes. Always destructive.
+  bool purge = 2;
+}
+
+service Workspaces {
+  // scope: read
+  rpc List(ListWorkspacesRequest) returns (ListWorkspacesResponse);
+  // scope: read
+  rpc Get(GetWorkspaceRequest) returns (Workspace);
+  // scope: plan
+  rpc PlanCreate(PlanCreateWorkspaceRequest) returns (Plan);
+  // scope: plan; the resulting plan is destructive
+  rpc PlanDelete(PlanDeleteWorkspaceRequest) returns (Plan);
+}

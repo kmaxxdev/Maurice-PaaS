@@ -1,0 +1,32 @@
+/* Design tokens of the Maurice UI kit. Everything in the panel reads from these;
+   components never use literal colors. Dark is the default for an operator tool,
+   light follows the system or an explicit data-theme. */
+:root {
+  --m-bg: #0f141a;
+  --m-surface: #161d26;
+  --m-surface-2: #1d2733;
+  --m-fg: #e4e9ee;
+  --m-muted: #95a3b2;
+  --m-line: #2a3542;
+  --m-accent: #4fc3dd;
+  --m-accent-soft: #143441;
+  --m-ok: #5fcf85;
+  --m-warn: #f0a24a;
+  --m-danger: #ef6b6b;
+  --m-font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --m-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --m-radius: 6px;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --m-bg: #f6f7f8; --m-surface: #ffffff; --m-surface-2: #eef1f4; --m-fg: #1b2430; --m-muted: #5d6b7a;
+    --m-line: #d4dae1; --m-accent: #0e7490; --m-accent-soft: #d9eef3; --m-ok: #15803d; --m-warn: #b45309; --m-danger: #b91c1c;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --m-bg: #f6f7f8; --m-surface: #ffffff; --m-surface-2: #eef1f4; --m-fg: #1b2430; --m-muted: #5d6b7a;
+  --m-line: #d4dae1; --m-accent: #0e7490; --m-accent-soft: #d9eef3; --m-ok: #15803d; --m-warn: #b45309; --m-danger: #b91c1c;
+  color-scheme: light;
+}
