@@ -10,3 +10,9 @@
 # Build output
 /bin/
 /dist/
+
+# Obsidian workspace settings (per machine)
+.obsidian/
+
+# Graphify output (regenerate with /graphify)
+graphify-out/
