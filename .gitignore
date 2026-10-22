@@ -16,3 +16,10 @@
 
 # Graphify output (regenerate with /graphify)
 graphify-out/
+
+# Rust
+/target/
+
+# Node
+node_modules/
+packages/*/dist/

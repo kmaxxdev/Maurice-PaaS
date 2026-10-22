@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "maurice/v1/common.proto";
+
+message GetPlanRequest {
+  string id = 1;
+}
+message ApplyPlanRequest {
+  string plan_id = 1;
+  // Required true for destructive plans; the server refuses otherwise.
+  bool confirmed = 2;
+}
+message DiscardPlanRequest {
+  string id = 1;
+}
+
+message ApplyEvent {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_STARTED = 1;
+    STATUS_DONE = 2;
+    STATUS_FAILED = 3;
+  }
+  // Index into Plan.changes.
+  uint32 change_index = 1;
+  Status status = 2;
+  string detail = 3;
+}
+
+service Plans {
+  // scope: read
+  rpc Get(GetPlanRequest) returns (Plan);
+  // scope: apply
+  rpc Apply(ApplyPlanRequest) returns (stream ApplyEvent);
+  // scope: plan
+  rpc Discard(DiscardPlanRequest) returns (Empty);
+}

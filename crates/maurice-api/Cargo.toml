@@ -1,0 +1,29 @@
+[package]
+name = "maurice-api"
+description = "ConnectRPC services of the Maurice panel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+maurice-core = { workspace = true }
+maurice-agent = { workspace = true }
+connectrpc = { workspace = true }
+buffa = { workspace = true }
+buffa-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+[build-dependencies]
+connectrpc-build = { workspace = true }
+
+[lints]
+workspace = true

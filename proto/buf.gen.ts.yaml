@@ -1,0 +1,5 @@
+version: v2
+plugins:
+  - remote: buf.build/bufbuild/es:v2.16.0
+    out: ../packages/web/src/gen
+    opt: target=ts
