@@ -28,3 +28,13 @@ Defaults: name `maurice-dev-ubuntu`, Ubuntu 26.04 cloud image, 4 vCPU, 8 GB RAM,
 ## What the VM has after first boot
 
 Podman 5.7 with crun, netavark and aardvark-dns; `systemd-container` for `machinectl` and `systemd-run --machine`; AppArmor at the Ubuntu default (SELinux enforcing on the Fedora variant); `podman.socket` enabled for the `dev` user. Workspace users are created by the agent during tests, not by cloud-init.
+
+## Verified on 2026-10-23
+
+VM `maurice-dev-ubuntu`: Ubuntu 26.04.1, Podman 5.7.0, crun 1.21, AppArmor on. As user `dev`:
+
+- `podman run --rm quay.io/podman/hello` works rootless; `podman.socket` runs under `systemd --user` with linger.
+- Units rendered by `maurice render examples/shop.json`, copied into `~/.config/containers/systemd/`, pass `/usr/libexec/podman/quadlet -user -dryrun`.
+- `systemctl --user start postgres.service` blocks ~45 s on the first pull and returns only once the health check passes (`Notify=healthy`). The container shows `(healthy)`, a sibling container resolves `postgres` through the workspace network, nothing listens on the host (`ss -ltn` has no 5432), the journal carries the container log, `stop` leaves no container behind.
+
+Two generator bugs surfaced only here and were fixed: `DNS=` in a `.network` unit takes resolver IPs (DNS is on by default), and Quadlet already derives `Requires`/`After` from `Network=`.
