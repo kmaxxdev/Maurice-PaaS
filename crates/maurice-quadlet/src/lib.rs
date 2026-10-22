@@ -49,7 +49,8 @@ impl std::fmt::Display for RenderError {
 }
 impl std::error::Error for RenderError {}
 
-/// The workspace network. One per workspace; service names resolve through aardvark-dns.
+/// The workspace network. One per workspace; service names resolve through aardvark-dns,
+/// which Quadlet enables by default (verified on Podman 5.7: `DNS=` takes resolver IPs).
 pub fn render_network(ws: &Workspace) -> Unit {
     let name = ws.network_name();
     let content = format!(
@@ -59,7 +60,6 @@ pub fn render_network(ws: &Workspace) -> Unit {
          \n\
          [Network]\n\
          NetworkName={name}\n\
-         DNS=true\n\
          Internal=false\n",
         ws = ws.name,
     );
@@ -101,8 +101,7 @@ pub fn render_container(input: &RenderInput<'_>) -> Result<Unit, RenderError> {
     );
     let _ = writeln!(out, "[Unit]");
     let _ = writeln!(out, "Description={} ({})", svc.name, kind_label(svc.kind));
-    let _ = writeln!(out, "Requires={}-network.service", ws.network_name());
-    let _ = writeln!(out, "After={}-network.service", ws.network_name());
+    // No explicit Requires/After for the network: Quadlet derives them from `Network=`.
     out.push('\n');
 
     let _ = writeln!(out, "[Container]");
@@ -326,7 +325,8 @@ mod tests {
         let u = render_network(&fixture());
         assert_eq!(u.file_name, "shop-net.network");
         assert!(u.content.contains("NetworkName=shop-net"));
-        assert!(u.content.contains("DNS=true"));
+        // aardvark-dns is on by default; `DNS=` in Quadlet is a list of resolver IPs, never a flag.
+        assert!(!u.content.contains("DNS="));
     }
 
     #[test]
