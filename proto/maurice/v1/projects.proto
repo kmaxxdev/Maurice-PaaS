@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+// A project groups the services of one repository and holds how to fetch it.
+message Project {
+  string id = 1;
+  string workspace_id = 2;
+  string name = 3;
+  // Clone URL; ssh for private repositories (then git_key_secret is required).
+  string git_repo = 4;
+  // Branch or tag to build from.
+  string git_ref = 5;
+  // Name of a workspace secret holding the private deploy key (PEM).
+  string git_key_secret = 6;
+}
+
+message ListProjectsRequest {
+  string workspace_id = 1;
+}
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+message UpsertProjectRequest {
+  string workspace_id = 1;
+  string name = 2;
+  string git_repo = 3;
+  string git_ref = 4;
+  string git_key_secret = 5;
+}
+
+service Projects {
+  // scope: read
+  rpc List(ListProjectsRequest) returns (ListProjectsResponse);
+  // scope: apply. Changes configuration only; nothing happens on the host until a deploy.
+  rpc Upsert(UpsertProjectRequest) returns (Project);
+}

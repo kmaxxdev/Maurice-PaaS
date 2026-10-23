@@ -65,6 +65,26 @@ pub enum ServiceCommand {
 }
 
 #[derive(Subcommand)]
+pub enum ProjectCommand {
+    /// List projects of a workspace with their repositories.
+    List { workspace: String },
+    /// Create a project or set its repository, branch and deploy key secret.
+    Set {
+        workspace: String,
+        name: String,
+        /// Clone URL. Use ssh:// or git@ for private repositories and pass --key-secret.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Branch or tag to build from.
+        #[arg(long = "ref", default_value = "main")]
+        git_ref: String,
+        /// Workspace secret holding the private deploy key (PEM).
+        #[arg(long)]
+        key_secret: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum SecretCommand {
     /// List secret names and versions of a workspace.
     List { workspace: String },
@@ -461,6 +481,72 @@ pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Re
                 .await?
                 .into_owned();
             println!("secret {name} stored as version {}", info.version);
+        }
+    }
+    Ok(())
+}
+
+pub async fn project(cmd: ProjectCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
+    let client = ProjectsClient::new(Client::plaintext(), config(server)?);
+    match cmd {
+        ProjectCommand::List { workspace } => {
+            let resp = client
+                .list(ListProjectsRequest {
+                    workspace_id: workspace,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            if resp.projects.is_empty() {
+                println!("no projects");
+            }
+            for p in &resp.projects {
+                println!(
+                    "{:<36} {:<14} {} @ {}{}",
+                    p.id,
+                    p.name,
+                    if p.git_repo.is_empty() {
+                        "(no repository)"
+                    } else {
+                        &p.git_repo
+                    },
+                    p.git_ref,
+                    if p.git_key_secret.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  key: {}", p.git_key_secret)
+                    }
+                );
+            }
+        }
+        ProjectCommand::Set {
+            workspace,
+            name,
+            repo,
+            git_ref,
+            key_secret,
+        } => {
+            let p = client
+                .upsert(UpsertProjectRequest {
+                    workspace_id: workspace,
+                    name,
+                    git_repo: repo.unwrap_or_default(),
+                    git_ref,
+                    git_key_secret: key_secret.unwrap_or_default(),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            println!(
+                "project {} → {} @ {}",
+                p.name,
+                if p.git_repo.is_empty() {
+                    "(no repository)"
+                } else {
+                    &p.git_repo
+                },
+                p.git_ref
+            );
         }
     }
     Ok(())

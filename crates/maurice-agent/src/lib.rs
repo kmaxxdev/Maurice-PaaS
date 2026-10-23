@@ -79,6 +79,36 @@ pub trait Agent: Send + Sync {
     // --- journal of one unit of that user, newest last ---
     async fn read_journal(&self, user: &UserRef, unit: &str, tail: u32)
     -> Result<Vec<JournalLine>>;
+
+    // --- clone a repository and build an image, both as the workspace user ---
+    async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildSpec {
+    /// Clone URL (https or ssh).
+    pub repo: String,
+    /// Branch or tag.
+    pub git_ref: String,
+    /// Private key in PEM for ssh clones; written to the user's home with mode 0600.
+    #[serde(skip_serializing)]
+    pub ssh_key: Option<Vec<u8>>,
+    /// Dockerfile path and context directory, both relative to the repository root.
+    pub dockerfile: String,
+    pub context: String,
+    /// Image name without tag, e.g. `localhost/shop/web`; the tag becomes the commit sha.
+    pub image: String,
+    /// Scratch name for the checkout directory, e.g. the service name.
+    pub checkout: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildResult {
+    pub git_sha: String,
+    /// Full image reference that was built, `<image>:<short sha>`.
+    pub image_ref: String,
+    /// Tail of the build output for the apply log.
+    pub log_tail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +156,12 @@ pub enum Op {
     SetSecret {
         user: String,
         name: String,
+    },
+    BuildImage {
+        user: String,
+        repo: String,
+        git_ref: String,
+        image: String,
     },
 }
 
@@ -238,5 +274,18 @@ impl Agent for DryRunAgent {
         _tail: u32,
     ) -> Result<Vec<JournalLine>> {
         Ok(vec![])
+    }
+    async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult> {
+        self.record(Op::BuildImage {
+            user: user.name.clone(),
+            repo: spec.repo.clone(),
+            git_ref: spec.git_ref.clone(),
+            image: spec.image.clone(),
+        });
+        Ok(BuildResult {
+            git_sha: "0000000".into(),
+            image_ref: format!("{}:0000000", spec.image),
+            log_tail: "dry-run".into(),
+        })
     }
 }

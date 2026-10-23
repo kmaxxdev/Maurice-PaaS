@@ -67,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         command: ctl::SecretCommand,
     },
+    /// Projects: repositories and deploy keys (through the panel).
+    Project {
+        #[command(subcommand)]
+        command: ctl::ProjectCommand,
+    },
     /// Render the Quadlet units a workspace definition would produce, without touching the host.
     Render {
         /// Path to a workspace definition (JSON).
@@ -135,6 +140,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Plan { command } => ctl::plan(command, &cli.server, tier).await?,
         Command::Service { command } => ctl::service(command, &cli.server, tier).await?,
         Command::Secret { command } => ctl::secret(command, &cli.server, tier).await?,
+        Command::Project { command } => ctl::project(command, &cli.server, tier).await?,
         Command::Serve {
             listen,
             database_url,

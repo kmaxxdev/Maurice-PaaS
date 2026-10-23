@@ -16,6 +16,7 @@ const kindLabel: Record<number, string> = {
   [PlannedChange_Kind.PUBLISH_PORT]: "publish port",
   [PlannedChange_Kind.UNPUBLISH_PORT]: "unpublish port",
   [PlannedChange_Kind.SET_SECRET]: "set secret",
+  [PlannedChange_Kind.BUILD_IMAGE]: "build image",
 };
 
 const sevClass: Record<number, string> = { [Severity.ERROR]: "danger", [Severity.WARNING]: "warn", [Severity.INFO]: "accent" };

@@ -18,6 +18,7 @@ create table projects (
     workspace_id  uuid not null references workspaces(id) on delete cascade,
     name          text not null,
     git_repo      text,
+    git_ref       text not null default 'main',
     git_key_secret_id uuid,
     unique (workspace_id, name)
 );

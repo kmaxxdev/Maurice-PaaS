@@ -6,7 +6,7 @@ import type { Plan } from "../gen/maurice/v1/common_pb";
 import { ServiceSchema } from "../gen/maurice/v1/services_pb";
 import { ServiceKind } from "../gen/maurice/v1/common_pb";
 import type { Service, ServiceStatus } from "../gen/maurice/v1/services_pb";
-import { workspaces, services, secrets, errorText } from "../api";
+import { workspaces, services, secrets, projects, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
 
 const exampleService = JSON.stringify(
@@ -47,6 +47,24 @@ export function Workspace() {
   const [secretName, setSecretName] = createSignal("");
   const [secretValue, setSecretValue] = createSignal("");
   const [secretMsg, setSecretMsg] = createSignal("");
+  const [projectList, { refetch: refetchProjects }] = createResource(() => params.id, async (id) => (await projects.list({ workspaceId: id })).projects);
+  const [prName, setPrName] = createSignal("default");
+  const [prRepo, setPrRepo] = createSignal("");
+  const [prRef, setPrRef] = createSignal("main");
+  const [prKey, setPrKey] = createSignal("");
+  const [prMsg, setPrMsg] = createSignal("");
+
+  async function saveProject(e: Event) {
+    e.preventDefault();
+    setPrMsg("");
+    try {
+      const p = await projects.upsert({ workspaceId: params.id, name: prName(), gitRepo: prRepo(), gitRef: prRef(), gitKeySecret: prKey() });
+      setPrMsg(`${p.name} → ${p.gitRepo || "(no repository)"} @ ${p.gitRef}`);
+      refetchProjects();
+    } catch (err) {
+      setPrMsg(errorText(err));
+    }
+  }
 
   async function planUpsert(e: Event) {
     e.preventDefault();
@@ -143,6 +161,41 @@ export function Workspace() {
           <div class="row">
             <button class="primary" type="submit">Plan</button>
           </div>
+        </form>
+      </div>
+
+      <div class="section card">
+        <h2 style={{ "margin-bottom": "10px" }}>Projects</h2>
+        <p class="muted small" style={{ margin: "0 0 8px" }}>A project groups services from one repository. Services built from a Dockerfile need the repository and branch set here.</p>
+        <Show when={projectList()?.length}>
+          <table>
+            <thead><tr><th>Name</th><th>Repository</th><th>Ref</th><th>Deploy key</th></tr></thead>
+            <tbody>
+              <For each={projectList()}>{(p) => <tr><td>{p.name}</td><td class="mono small">{p.gitRepo || <span class="muted">none</span>}</td><td class="mono">{p.gitRef}</td><td class="mono">{p.gitKeySecret || <span class="muted">none</span>}</td></tr>}</For>
+            </tbody>
+          </table>
+        </Show>
+        <form class="inline" onSubmit={saveProject} style={{ "margin-top": "10px" }}>
+          <label>
+            Project
+            <input id="pr-name" value={prName()} onInput={(e) => setPrName(e.currentTarget.value)} required pattern="[a-z0-9-]+" />
+          </label>
+          <label>
+            Repository URL
+            <input id="pr-repo" value={prRepo()} onInput={(e) => setPrRepo(e.currentTarget.value)} placeholder="https://github.com/org/app.git" style={{ width: "320px" }} />
+          </label>
+          <label>
+            Ref
+            <input id="pr-ref" value={prRef()} onInput={(e) => setPrRef(e.currentTarget.value)} />
+          </label>
+          <label>
+            Deploy key secret
+            <input id="pr-key" value={prKey()} onInput={(e) => setPrKey(e.currentTarget.value)} placeholder="optional" />
+          </label>
+          <button type="submit">Save</button>
+          <Show when={prMsg()}>
+            <span class="small">{prMsg()}</span>
+          </Show>
         </form>
       </div>
 

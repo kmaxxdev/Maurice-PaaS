@@ -4,7 +4,9 @@
 //! argument is validated before it reaches a command line, and no command is
 //! ever composed from free text.
 
-use crate::{Agent, AgentError, JournalLine, NewUser, Result, UnitStatus, UserRef};
+use crate::{
+    Agent, AgentError, BuildResult, BuildSpec, JournalLine, NewUser, Result, UnitStatus, UserRef,
+};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -68,6 +70,17 @@ impl HostAgent {
         args: &[&str],
         stdin: &[u8],
     ) -> Result<String> {
+        self.run_as_user_env(user, &[], args, stdin).await
+    }
+
+    /// Same, with extra `KEY=value` environment entries for the command.
+    async fn run_as_user_env(
+        &self,
+        user: &UserRef,
+        env: &[&str],
+        args: &[&str],
+        stdin: &[u8],
+    ) -> Result<String> {
         use tokio::io::AsyncWriteExt;
         let machine = format!("{}@", user.name);
         let mut full = vec![
@@ -79,6 +92,10 @@ impl HostAgent {
             machine.as_str(),
             "--user",
         ];
+        for e in env {
+            full.push("-E");
+            full.push(e);
+        }
         full.extend_from_slice(args);
         tracing::debug!(?full, "systemd-run");
         let mut child = Command::new("systemd-run")
@@ -259,6 +276,57 @@ pub fn validate_secret_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         Err(AgentError::Refused(format!("invalid secret name '{name}'")))
+    }
+}
+
+fn validate_checkout_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!(
+            "invalid checkout name '{name}'"
+        )))
+    }
+}
+
+/// Paths inside a repository: relative, no parent traversal, no leading dash.
+fn validate_rel_path(p: &str) -> Result<()> {
+    let ok = !p.is_empty()
+        && !p.starts_with('/')
+        && !p.starts_with('-')
+        && !std::path::Path::new(p)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir));
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!(
+            "invalid repository path '{p}'"
+        )))
+    }
+}
+
+fn validate_image_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 200
+        && name.bytes().all(|b| {
+            b.is_ascii_lowercase()
+                || b.is_ascii_digit()
+                || b == b'/'
+                || b == b'-'
+                || b == b'.'
+                || b == b'_'
+        })
+        && !name.contains(':');
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!("invalid image name '{name}'")))
     }
 }
 
@@ -444,6 +512,109 @@ impl Agent for HostAgent {
         self.run_as_user_with_stdin(user, &["podman", "secret", "create", name, "-"], value)
             .await
             .map(drop)
+    }
+
+    async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult> {
+        validate_checkout_name(&spec.checkout)?;
+        validate_rel_path(&spec.dockerfile)?;
+        validate_rel_path(&spec.context)?;
+        validate_image_name(&spec.image)?;
+        if spec.git_ref.is_empty() || spec.git_ref.starts_with('-') || spec.git_ref.contains("..") {
+            return Err(AgentError::Refused(format!(
+                "invalid git ref '{}'",
+                spec.git_ref
+            )));
+        }
+        if spec.repo.starts_with('-') || spec.repo.chars().any(char::is_whitespace) {
+            return Err(AgentError::Refused("invalid repository url".into()));
+        }
+        let (gid, home) = self.home_of(user).await?;
+        let builds = home.join(".cache/maurice/builds");
+        let dir = builds.join(&spec.checkout);
+        tokio::fs::create_dir_all(&builds)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        chown_recursive(&home.join(".cache"), user.uid, gid).await?;
+
+        // Deploy key, if any, lives in the user's home with mode 0600.
+        let mut git_env: Vec<String> = vec!["GIT_TERMINAL_PROMPT=0".into()];
+        if let Some(key) = &spec.ssh_key {
+            use std::os::unix::fs::PermissionsExt;
+            let keys = home.join(".config/maurice/keys");
+            tokio::fs::create_dir_all(&keys)
+                .await
+                .map_err(|e| AgentError::Host(e.to_string()))?;
+            let key_path = keys.join(&spec.checkout);
+            tokio::fs::write(&key_path, key)
+                .await
+                .map_err(|e| AgentError::Host(e.to_string()))?;
+            tokio::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
+                .await
+                .map_err(|e| AgentError::Host(e.to_string()))?;
+            chown_recursive(&home.join(".config/maurice"), user.uid, gid).await?;
+            git_env.push(format!(
+                "GIT_SSH_COMMAND=ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+                key_path.display()
+            ));
+        }
+
+        let dir_s = dir.to_string_lossy().into_owned();
+        // Fresh shallow clone every time: builds come from the ref, not from leftovers.
+        self.run_as_user_env(user, &[], &["rm", "-rf", &dir_s], b"")
+            .await?;
+        let env_refs: Vec<&str> = git_env.iter().map(String::as_str).collect();
+        self.run_as_user_env(
+            user,
+            &env_refs,
+            &[
+                "git",
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "--branch",
+                &spec.git_ref,
+                "--",
+                &spec.repo,
+                &dir_s,
+            ],
+            b"",
+        )
+        .await?;
+        let sha = self
+            .run_as_user_env(user, &[], &["git", "-C", &dir_s, "rev-parse", "HEAD"], b"")
+            .await?
+            .trim()
+            .to_string();
+        let short = sha.get(..12).unwrap_or(&sha).to_string();
+        let image_ref = format!("{}:{short}", spec.image);
+        let dockerfile = dir.join(&spec.dockerfile).to_string_lossy().into_owned();
+        let context = dir.join(&spec.context).to_string_lossy().into_owned();
+        tracing::info!(user = %user.name, %image_ref, "building image");
+        let out = self
+            .run_as_user_env(
+                user,
+                &[],
+                &[
+                    "podman",
+                    "build",
+                    "--pull=newer",
+                    "-t",
+                    &image_ref,
+                    "-f",
+                    &dockerfile,
+                    &context,
+                ],
+                b"",
+            )
+            .await?;
+        let lines: Vec<&str> = out.lines().collect();
+        let log_tail = lines[lines.len().saturating_sub(20)..].join("\n");
+        Ok(BuildResult {
+            git_sha: sha,
+            image_ref,
+            log_tail,
+        })
     }
 
     async fn read_journal(

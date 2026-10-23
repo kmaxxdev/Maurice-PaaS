@@ -183,6 +183,7 @@ pub struct ProjectRow {
     pub workspace_id: Uuid,
     pub name: String,
     pub git_repo: Option<String>,
+    pub git_ref: String,
     pub git_key_secret_id: Option<Uuid>,
 }
 
@@ -285,6 +286,7 @@ impl Store {
             workspace_id,
             name: name.into(),
             git_repo: None,
+            git_ref: "main".into(),
             git_key_secret_id: None,
         };
         sqlx::query("insert into projects (id, workspace_id, name) values ($1, $2, $3)")
@@ -294,6 +296,33 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    /// Create or update a project's repository settings.
+    pub async fn upsert_project(
+        &self,
+        workspace_id: Uuid,
+        name: &str,
+        git_repo: Option<&str>,
+        git_ref: &str,
+        git_key_secret_id: Option<Uuid>,
+    ) -> anyhow::Result<ProjectRow> {
+        let existing = self.ensure_project(workspace_id, name).await?;
+        sqlx::query(
+            "update projects set git_repo = $2, git_ref = $3, git_key_secret_id = $4 where id = $1",
+        )
+        .bind(existing.id)
+        .bind(git_repo)
+        .bind(git_ref)
+        .bind(git_key_secret_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(ProjectRow {
+            git_repo: git_repo.map(Into::into),
+            git_ref: git_ref.into(),
+            git_key_secret_id,
+            ..existing
+        })
     }
 
     pub async fn list_services(&self, workspace_id: Uuid) -> anyhow::Result<Vec<ServiceFull>> {
