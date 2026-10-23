@@ -5,7 +5,7 @@
 **A self-hosted deployment panel for one powerful server, built on rootless Podman.**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Roadmap)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Roadmap)
 [![Board](https://img.shields.io/badge/tasks-project%20board-8A2BE2.svg)](https://github.com/users/kmaxxdev/projects/1)
 [![Wiki](https://img.shields.io/badge/docs-wiki-informational.svg)](https://github.com/kmaxxdev/Maurice-PaaS/wiki)
 
@@ -18,8 +18,10 @@ It is built around what Podman does well: rootless isolation by Unix user,
 Quadlet and systemd as the lifecycle engine, auto-update with rollback, native
 secrets.
 
-> **Status:** pre-alpha. The plan is written, the code is not. Follow progress on
-> the [task board](https://github.com/users/kmaxxdev/projects/1).
+> **Status:** Alpha in progress. Workspaces, services from images or Dockerfiles,
+> secrets, plans with apply, logs, stats and a first web UI work end to end on a
+> real Podman host. Not yet usable for production: no proxy, TLS or backups
+> before MVP. Follow progress on the [task board](https://github.com/users/kmaxxdev/projects/1).
 
 ## Why another panel
 
@@ -61,7 +63,7 @@ a runtime dependency.
 
 | Stage | Purpose | Status |
 |---|---|---|
-| **Alpha** | Panel → agent → Quadlet → rootless Podman works on a real server. Workspaces, deploy from image or Dockerfile, logs, networks, secrets, validator. | in planning |
+| **Alpha** | Panel → agent → Quadlet → rootless Podman works on a real server. Workspaces, deploy from image or Dockerfile, logs, networks, secrets, validator. | in progress, core done |
 | **MVP** | Fit for production. Caddy with TLS, blue-green deploys, registry, webhooks, service catalogue, Telegram alerts, S3 backups, telemetry, auth. | — |
 | **Beta** | Full feature set. MCP server, built-in agent, remote dev workspaces, Cloudflare tunnels, log triage, Plane tracker. | — |
 | **Release** | Stabilisation. Docs, upgrade procedure, Podman compatibility matrix, regression tests. | — |
