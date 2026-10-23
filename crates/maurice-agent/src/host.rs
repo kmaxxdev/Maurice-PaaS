@@ -5,7 +5,8 @@
 //! ever composed from free text.
 
 use crate::{
-    Agent, AgentError, BuildResult, BuildSpec, JournalLine, NewUser, Result, UnitStatus, UserRef,
+    Agent, AgentError, BuildResult, BuildSpec, ContainerStats, JournalLine, NewUser, Result,
+    UnitStatus, UserRef,
 };
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -277,6 +278,31 @@ pub fn validate_secret_name(name: &str) -> Result<()> {
     } else {
         Err(AgentError::Refused(format!("invalid secret name '{name}'")))
     }
+}
+
+/// "4.755MB / 8.322GB" → (bytes, bytes). podman prints decimal units.
+fn parse_pair(s: &str) -> (u64, u64) {
+    let mut it = s.split('/').map(|p| parse_size(p.trim()));
+    (it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+fn parse_size(s: &str) -> u64 {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num.trim().parse().unwrap_or(0.0);
+    let mult: f64 = match unit.trim().to_ascii_lowercase().as_str() {
+        "b" | "" => 1.0,
+        "kb" => 1e3,
+        "mb" => 1e6,
+        "gb" => 1e9,
+        "tb" => 1e12,
+        "kib" => 1024.0,
+        "mib" => 1024.0 * 1024.0,
+        "gib" => 1024.0 * 1024.0 * 1024.0,
+        _ => 1.0,
+    };
+    (n * mult).round() as u64
 }
 
 fn validate_checkout_name(name: &str) -> Result<()> {
@@ -617,12 +643,74 @@ impl Agent for HostAgent {
         })
     }
 
+    async fn container_stats(
+        &self,
+        user: &UserRef,
+        service: &str,
+    ) -> Result<Option<ContainerStats>> {
+        if service.is_empty()
+            || !service
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return Err(AgentError::Refused(format!(
+                "invalid service name '{service}'"
+            )));
+        }
+        let label = format!("label=maurice.service={service}");
+        let names = self
+            .run_as_user_with_stdin(
+                user,
+                &["podman", "ps", "--filter", &label, "--format", "{{.Names}}"],
+                b"",
+            )
+            .await?;
+        let Some(name) = names
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        else {
+            return Ok(None);
+        };
+        let out = self
+            .run_as_user_with_stdin(
+                user,
+                &["podman", "stats", "--no-stream", "--format", "json", name],
+                b"",
+            )
+            .await?;
+        let v: serde_json::Value = serde_json::from_str(out.trim())
+            .map_err(|e| AgentError::Host(format!("stats json: {e}")))?;
+        let Some(row) = v.as_array().and_then(|a| a.first()) else {
+            return Ok(None);
+        };
+        let (mem, mem_limit) = parse_pair(row["mem_usage"].as_str().unwrap_or(""));
+        let (rx, tx) = parse_pair(row["net_io"].as_str().unwrap_or(""));
+        Ok(Some(ContainerStats {
+            container: name.to_string(),
+            cpu_percent: row["cpu_percent"]
+                .as_str()
+                .and_then(|s| s.trim_end_matches('%').parse().ok())
+                .unwrap_or(0.0),
+            mem_bytes: mem,
+            mem_limit_bytes: mem_limit,
+            net_rx_bytes: rx,
+            net_tx_bytes: tx,
+            pids: row["pids"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+        }))
+    }
+
     async fn read_journal(
         &self,
         user: &UserRef,
         unit: &str,
         tail: u32,
         since_unix: Option<u64>,
+        after_cursor: Option<&str>,
     ) -> Result<Vec<JournalLine>> {
         validate_unit_name(unit)?;
         let uid = user.uid.to_string();
@@ -635,7 +723,14 @@ impl Agent for HostAgent {
             args.push("--since");
             args.push(s);
         }
-        let out = self.run("journalctl", &&args).await?;
+        if let Some(c) = after_cursor {
+            if c.is_empty() || c.chars().any(char::is_whitespace) || c.starts_with('-') {
+                return Err(AgentError::Refused("invalid journal cursor".into()));
+            }
+            args.push("--after-cursor");
+            args.push(c);
+        }
+        let out = self.run("journalctl", &args).await?;
         let mut lines = Vec::new();
         for raw in out.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
@@ -653,6 +748,7 @@ impl Agent for HostAgent {
                 _ => String::new(),
             };
             lines.push(JournalLine {
+                cursor: v["__CURSOR"].as_str().unwrap_or("").to_string(),
                 realtime_usec: v["__REALTIME_TIMESTAMP"]
                     .as_str()
                     .and_then(|s| s.parse().ok())
@@ -801,6 +897,13 @@ mod tests {
         assert!(validate_unit_name("web@a1b2.service").is_ok());
         assert!(validate_unit_name("postgres").is_err());
         assert!(validate_unit_name("x; rm -rf /.service").is_err());
+    }
+
+    #[test]
+    fn sizes() {
+        assert_eq!(parse_size("4.755MB"), 4_755_000);
+        assert_eq!(parse_size("198B"), 198);
+        assert_eq!(parse_pair("4.755MB / 8.322GB"), (4_755_000, 8_322_000_000));
     }
 
     #[test]

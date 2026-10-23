@@ -65,7 +65,7 @@ printf 's3cret' | marik secret set <ws> pg_admin         # encrypted in PostgreS
 marik service upsert <ws> -f examples/postgres-service.json   # plan shows the unit diff
 marik plan apply <plan-id>                               # writes units, reloads
 marik service deploy <svc-id>  &&  marik plan apply <plan-id>  # starts, waits for healthy
-marik service unit <svc-id>  /  marik service logs <svc-id>
+marik service unit <svc-id>  /  marik service logs <svc-id> [--follow]  /  marik service stats <svc-id>
 maurice service delete <svc-id>  &&  maurice plan apply <plan-id> --confirm
 ```
 

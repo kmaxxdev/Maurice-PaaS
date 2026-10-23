@@ -79,13 +79,22 @@ pub trait Agent: Send + Sync {
     // --- journal of one unit of that user, newest last ---
     /// `since_unix` drops lines older than that moment; system uids get reused, so a new
     /// workspace must not see the journal of a previous owner of its uid.
+    /// `after_cursor` continues from a previous line's cursor (for follow mode).
     async fn read_journal(
         &self,
         user: &UserRef,
         unit: &str,
         tail: u32,
         since_unix: Option<u64>,
+        after_cursor: Option<&str>,
     ) -> Result<Vec<JournalLine>>;
+
+    // --- resource usage of the running container of a service (by label) ---
+    async fn container_stats(
+        &self,
+        user: &UserRef,
+        service: &str,
+    ) -> Result<Option<ContainerStats>>;
 
     // --- clone a repository and build an image, both as the workspace user ---
     async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult>;
@@ -118,8 +127,21 @@ pub struct BuildResult {
     pub log_tail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContainerStats {
+    pub container: String,
+    pub cpu_percent: f64,
+    pub mem_bytes: u64,
+    pub mem_limit_bytes: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+    pub pids: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalLine {
+    /// Opaque journal cursor; pass it back as `after_cursor` to continue.
+    pub cursor: String,
     /// Microseconds since the Unix epoch.
     pub realtime_usec: u64,
     pub priority: u8,
@@ -280,8 +302,17 @@ impl Agent for DryRunAgent {
         _unit: &str,
         _tail: u32,
         _since_unix: Option<u64>,
+        _after_cursor: Option<&str>,
     ) -> Result<Vec<JournalLine>> {
         Ok(vec![])
+    }
+
+    async fn container_stats(
+        &self,
+        _user: &UserRef,
+        _service: &str,
+    ) -> Result<Option<ContainerStats>> {
+        Ok(None)
     }
     async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult> {
         self.record(Op::BuildImage {

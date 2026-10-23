@@ -8,6 +8,7 @@ import { ServiceKind } from "../gen/maurice/v1/common_pb";
 import type { Service, ServiceStatus } from "../gen/maurice/v1/services_pb";
 import { workspaces, services, secrets, projects, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
+import { ServiceForm } from "../components/ServiceForm";
 
 const exampleService = JSON.stringify(
   {
@@ -43,6 +44,7 @@ export function Workspace() {
   const [plan, setPlan] = createSignal<Plan | null>(null);
   const [error, setError] = createSignal("");
   const [json, setJson] = createSignal(exampleService);
+  const [advanced, setAdvanced] = createSignal(false);
   const [project, setProject] = createSignal("default");
   const [secretName, setSecretName] = createSignal("");
   const [secretValue, setSecretValue] = createSignal("");
@@ -66,11 +68,20 @@ export function Workspace() {
     }
   }
 
-  async function planUpsert(e: Event) {
+  async function planUpsertJson(e: Event) {
     e.preventDefault();
     setError("");
     try {
       const svc: Service = fromJson(ServiceSchema, JSON.parse(json()));
+      await planUpsert(svc);
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  async function planUpsert(svc: Service) {
+    setError("");
+    try {
       setPlan(await services.planUpsert({ workspaceId: params.id, project: project(), service: svc }));
     } catch (err) {
       setError(errorText(err));
@@ -148,20 +159,24 @@ export function Workspace() {
       </div>
 
       <div class="section card">
-        <h2 style={{ "margin-bottom": "10px" }}>Add or replace a service</h2>
-        <form onSubmit={planUpsert} style={{ display: "grid", gap: "10px" }}>
-          <div class="row">
-            <label>
-              Project
-              <input id="svc-project" value={project()} onInput={(e) => setProject(e.currentTarget.value)} pattern="[a-z0-9-]+" />
-            </label>
+        <div class="row" style={{ "margin-bottom": "10px" }}>
+          <h2>Add or replace a service</h2>
+          <label style={{ "flex-direction": "row", display: "flex", gap: "6px", "align-items": "center" }}>
+            Project
+            <input id="svc-project" value={project()} onInput={(e) => setProject(e.currentTarget.value)} pattern="[a-z0-9-]+" style={{ width: "120px" }} />
+          </label>
+          <span style={{ "margin-left": "auto" }} />
+          <button type="button" onClick={() => setAdvanced(!advanced())}>{advanced() ? "Simple form" : "JSON"}</button>
+        </div>
+        <Show when={advanced()} fallback={<ServiceForm secretNames={secretList()?.map((s) => s.name)} onSubmit={planUpsert} />}>
+          <form onSubmit={planUpsertJson} style={{ display: "grid", gap: "10px" }}>
             <span class="muted small">Definition in the API's JSON shape. Secret names must exist in this workspace first.</span>
-          </div>
-          <textarea id="svc-json" class="mono" value={json()} onInput={(e) => setJson(e.currentTarget.value)} spellcheck={false} />
-          <div class="row">
-            <button class="primary" type="submit">Plan</button>
-          </div>
-        </form>
+            <textarea id="svc-json" class="mono" value={json()} onInput={(e) => setJson(e.currentTarget.value)} spellcheck={false} />
+            <div class="row">
+              <button class="primary" type="submit">Plan</button>
+            </div>
+          </form>
+        </Show>
       </div>
 
       <div class="section card">

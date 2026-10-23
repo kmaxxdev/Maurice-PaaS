@@ -8,6 +8,7 @@ use crate::proto::maurice::v1::*;
 use connectrpc::{
     ConnectError, ErrorCode, RequestContext, Response, ServiceRequest, ServiceResult, ServiceStream,
 };
+use futures::StreamExt;
 use maurice_agent::{Agent, NewUser, UserRef};
 use maurice_db::{DeploymentRow, PlanRow, Store, WorkspaceRow};
 use serde::{Deserialize, Serialize};
@@ -727,20 +728,17 @@ impl Services for ServicesSvc {
         let (full, loaded) = self.service_and_workspace(req.service_id).await?;
         let unit = format!("{}.service", full.service.name);
         let tail = if req.tail == 0 { 200 } else { req.tail };
-        let lines = self
-            .state
-            .agent
-            .read_journal(
-                &loaded.user,
-                &unit,
-                tail,
-                Some(loaded.ws.created_at.unix_timestamp() as u64),
-            )
+        let since = Some(loaded.ws.created_at.unix_timestamp() as u64);
+        let agent = self.state.agent.clone();
+        let user = loaded.user.clone();
+        let follow = req.follow;
+        let first = agent
+            .read_journal(&user, &unit, tail, since, None)
             .await
             .map_err(internal)?;
-        let out: Vec<LogLine> = lines
-            .into_iter()
-            .map(|l| LogLine {
+        let to_line = {
+            let unit = unit.clone();
+            move |l: maurice_agent::JournalLine| LogLine {
                 time: buffa_types::Timestamp {
                     seconds: (l.realtime_usec / 1_000_000) as i64,
                     nanos: ((l.realtime_usec % 1_000_000) * 1000) as i32,
@@ -751,21 +749,87 @@ impl Services for ServicesSvc {
                 message: l.message,
                 priority: l.priority as u32,
                 ..Default::default()
-            })
-            .collect();
-        // `follow` is accepted but not yet live; the stream ends after the tail.
-        Response::stream_ok(futures::stream::iter(out.into_iter().map(Ok)))
+            }
+        };
+        let last_cursor = first.last().map(|l| l.cursor.clone());
+        let initial: Vec<LogLine> = first.into_iter().map(&to_line).collect();
+        if !follow {
+            return Response::stream_ok(futures::stream::iter(initial.into_iter().map(Ok)));
+        }
+        // Follow: poll the journal after the last cursor until the client goes away
+        // (dropping the stream stops the loop).
+        let polled = futures::stream::unfold(
+            (last_cursor, agent, user, unit, to_line),
+            |(cursor, agent, user, unit, to_line)| async move {
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                let lines = match agent
+                    .read_journal(&user, &unit, 500, None, cursor.as_deref())
+                    .await
+                {
+                    Ok(l) => l,
+                    Err(e) => {
+                        return Some((
+                            vec![Err(ConnectError::new(ErrorCode::Internal, e.to_string()))],
+                            (cursor, agent, user, unit, to_line),
+                        ));
+                    }
+                };
+                let next = lines.last().map(|l| l.cursor.clone()).or(cursor);
+                let out: Vec<Result<LogLine, ConnectError>> =
+                    lines.into_iter().map(|l| Ok(to_line(l))).collect();
+                Some((out, (next, agent, user, unit, to_line)))
+            },
+        )
+        .flat_map(futures::stream::iter);
+        Response::stream_ok(futures::stream::iter(initial.into_iter().map(Ok)).chain(polled))
     }
 
     async fn stats(
         &self,
         _ctx: RequestContext,
-        _req: ServiceRequest<'_, StatsRequest>,
+        req: ServiceRequest<'_, StatsRequest>,
     ) -> ServiceResult<ServiceStream<StatsSample>> {
-        Err(ConnectError::new(
-            ErrorCode::Unimplemented,
-            "stats arrive with the podman socket client",
-        ))
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let agent = self.state.agent.clone();
+        let user = loaded.user.clone();
+        let name = full.service.name.clone();
+        // One sample every two seconds until the client disconnects.
+        let stream = futures::stream::unfold(
+            (agent, user, name, true),
+            |(agent, user, name, first)| async move {
+                if !first {
+                    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                }
+                let sample = match agent.container_stats(&user, &name).await {
+                    Ok(Some(st)) => Ok(StatsSample {
+                        time: buffa_types::Timestamp {
+                            seconds: OffsetDateTime::now_utc().unix_timestamp(),
+                            nanos: 0,
+                            ..Default::default()
+                        }
+                        .into(),
+                        cpu_cores: st.cpu_percent / 100.0,
+                        memory_bytes: st.mem_bytes,
+                        net_rx_bytes: st.net_rx_bytes,
+                        net_tx_bytes: st.net_tx_bytes,
+                        ..Default::default()
+                    }),
+                    // Not running: an empty sample keeps the stream alive so the UI can show "stopped".
+                    Ok(None) => Ok(StatsSample {
+                        time: buffa_types::Timestamp {
+                            seconds: OffsetDateTime::now_utc().unix_timestamp(),
+                            nanos: 0,
+                            ..Default::default()
+                        }
+                        .into(),
+                        ..Default::default()
+                    }),
+                    Err(e) => Err(ConnectError::new(ErrorCode::Internal, e.to_string())),
+                };
+                Some((sample, (agent, user, name, false)))
+            },
+        );
+        Response::stream_ok(stream)
     }
 
     async fn plan_upsert(
