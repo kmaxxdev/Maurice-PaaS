@@ -130,7 +130,11 @@ pub struct BuildResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContainerStats {
     pub container: String,
+    /// podman's own percentage; averaged since container start in one-shot mode, so
+    /// callers that want a live figure should derive it from `cpu_time_secs` deltas.
     pub cpu_percent: f64,
+    /// Cumulative CPU time consumed by the container, in seconds.
+    pub cpu_time_secs: f64,
     pub mem_bytes: u64,
     pub mem_limit_bytes: u64,
     pub net_rx_bytes: u64,

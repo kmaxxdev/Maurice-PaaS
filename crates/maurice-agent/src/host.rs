@@ -286,6 +286,40 @@ fn parse_pair(s: &str) -> (u64, u64) {
     (it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
+/// Go duration strings as podman prints them: "1h2m3.5s", "14.025ms", "250µs".
+fn parse_go_duration(s: &str) -> f64 {
+    let mut total = 0.0;
+    let mut num = String::new();
+    let mut unit = String::new();
+    let flush = |num: &mut String, unit: &mut String, total: &mut f64| {
+        if let Ok(n) = num.parse::<f64>() {
+            *total += match unit.as_str() {
+                "h" => n * 3600.0,
+                "m" => n * 60.0,
+                "s" => n,
+                "ms" => n / 1e3,
+                "µs" | "us" => n / 1e6,
+                "ns" => n / 1e9,
+                _ => 0.0,
+            };
+        }
+        num.clear();
+        unit.clear();
+    };
+    for c in s.trim().chars() {
+        if c.is_ascii_digit() || c == '.' {
+            if !unit.is_empty() {
+                flush(&mut num, &mut unit, &mut total);
+            }
+            num.push(c);
+        } else if !c.is_whitespace() {
+            unit.push(c);
+        }
+    }
+    flush(&mut num, &mut unit, &mut total);
+    total
+}
+
 fn parse_size(s: &str) -> u64 {
     let s = s.trim();
     let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
@@ -693,6 +727,7 @@ impl Agent for HostAgent {
                 .as_str()
                 .and_then(|s| s.trim_end_matches('%').parse().ok())
                 .unwrap_or(0.0),
+            cpu_time_secs: parse_go_duration(row["cpu_time"].as_str().unwrap_or("")),
             mem_bytes: mem,
             mem_limit_bytes: mem_limit,
             net_rx_bytes: rx,
@@ -897,6 +932,13 @@ mod tests {
         assert!(validate_unit_name("web@a1b2.service").is_ok());
         assert!(validate_unit_name("postgres").is_err());
         assert!(validate_unit_name("x; rm -rf /.service").is_err());
+    }
+
+    #[test]
+    fn go_durations() {
+        assert!((parse_go_duration("14.025ms") - 0.014025).abs() < 1e-9);
+        assert!((parse_go_duration("1m2.5s") - 62.5).abs() < 1e-9);
+        assert!((parse_go_duration("1h0m0s") - 3600.0).abs() < 1e-9);
     }
 
     #[test]

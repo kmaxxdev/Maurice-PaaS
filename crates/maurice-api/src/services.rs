@@ -794,26 +794,39 @@ impl Services for ServicesSvc {
         let user = loaded.user.clone();
         let name = full.service.name.clone();
         // One sample every two seconds until the client disconnects.
+        // CPU is derived from consecutive cpu_time samples: podman's one-shot percentage is
+        // averaged since the container started and would draw a flat line.
         let stream = futures::stream::unfold(
-            (agent, user, name, true),
-            |(agent, user, name, first)| async move {
+            (agent, user, name, true, None::<(f64, std::time::Instant)>),
+            |(agent, user, name, first, prev)| async move {
                 if !first {
                     tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
                 }
+                let now = std::time::Instant::now();
+                let mut next_prev = None;
                 let sample = match agent.container_stats(&user, &name).await {
-                    Ok(Some(st)) => Ok(StatsSample {
-                        time: buffa_types::Timestamp {
-                            seconds: OffsetDateTime::now_utc().unix_timestamp(),
-                            nanos: 0,
+                    Ok(Some(st)) => {
+                        let cores = match prev {
+                            Some((t0, i0)) if now > i0 && st.cpu_time_secs >= t0 => {
+                                (st.cpu_time_secs - t0) / (now - i0).as_secs_f64()
+                            }
+                            _ => st.cpu_percent / 100.0,
+                        };
+                        next_prev = Some((st.cpu_time_secs, now));
+                        Ok(StatsSample {
+                            time: buffa_types::Timestamp {
+                                seconds: OffsetDateTime::now_utc().unix_timestamp(),
+                                nanos: 0,
+                                ..Default::default()
+                            }
+                            .into(),
+                            cpu_cores: cores,
+                            memory_bytes: st.mem_bytes,
+                            net_rx_bytes: st.net_rx_bytes,
+                            net_tx_bytes: st.net_tx_bytes,
                             ..Default::default()
-                        }
-                        .into(),
-                        cpu_cores: st.cpu_percent / 100.0,
-                        memory_bytes: st.mem_bytes,
-                        net_rx_bytes: st.net_rx_bytes,
-                        net_tx_bytes: st.net_tx_bytes,
-                        ..Default::default()
-                    }),
+                        })
+                    }
                     // Not running: an empty sample keeps the stream alive so the UI can show "stopped".
                     Ok(None) => Ok(StatsSample {
                         time: buffa_types::Timestamp {
@@ -826,7 +839,7 @@ impl Services for ServicesSvc {
                     }),
                     Err(e) => Err(ConnectError::new(ErrorCode::Internal, e.to_string())),
                 };
-                Some((sample, (agent, user, name, false)))
+                Some((sample, (agent, user, name, false, next_prev)))
             },
         );
         Response::stream_ok(stream)
@@ -902,8 +915,18 @@ impl Services for ServicesSvc {
                 services: vec![core_svc.clone()],
             }),
         }
+        // Only findings about this service (or host ports) block its plan; problems of
+        // other services are theirs to fix and must not wedge the whole workspace.
+        let svc_tag = format!(":{}", row.name);
         let findings: Vec<StoredFinding> = maurice_core::validate_workspace(&core)
             .iter()
+            .filter(|f| {
+                f.target == format!("service:{}", row.name)
+                    || f.target.starts_with(&format!("env:{}/", row.name))
+                    || f.target.starts_with(&format!("port:{}/", row.name))
+                    || f.code == "port.conflict"
+                    || f.target.ends_with(&svc_tag)
+            })
             .map(StoredFinding::from)
             .collect();
 

@@ -18,10 +18,40 @@ It is built around what Podman does well: rootless isolation by Unix user,
 Quadlet and systemd as the lifecycle engine, auto-update with rollback, native
 secrets.
 
-> **Status:** Alpha in progress. Workspaces, services from images or Dockerfiles,
-> secrets, plans with apply, logs, stats and a first web UI work end to end on a
-> real Podman host. Not yet usable for production: no proxy, TLS or backups
-> before MVP. Follow progress on the [task board](https://github.com/users/kmaxxdev/projects/1).
+> **Status: Alpha.** Workspaces, services from images or Dockerfiles, secrets,
+> plans with apply, logs, live stats and a web UI work end to end on a real Podman
+> host. Not for production yet: no proxy, TLS, auth or backups before MVP. The
+> [Alpha guide](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Alpha-Guide) shows
+> everything that works; progress is on the [task board](https://github.com/users/kmaxxdev/projects/1).
+
+![Service overview with live usage](docs/images/overview.png)
+
+## What works today
+
+- **Workspaces** as system users with their own subuid range, home, network and `systemd --user`; deleting one leaves nothing behind.
+- **Services** from an image or from a Dockerfile in a git repository, rendered to Quadlet units; stateful services get a volume, every service a stable DNS name inside its workspace.
+- **Plan / apply** for every change, with the unit diff shown before anything is written and a confirmation step for destructive plans.
+- **Secrets** encrypted at rest, delivered through `podman secret`, never written to units or logs.
+- **Closed ports by default**; publishing binds to `127.0.0.1` unless told otherwise, and host port clashes across workspaces are refused.
+- **Deploy** waits for the health check; **restart**, **stop**, **logs** with follow, **live CPU, memory and network**, the unit file on disk.
+- **Reboot-safe**: deployed services come back on their own.
+- **Web UI** embedded in the single binary, plus the `marik` / `maurice` CLI with the same capabilities.
+
+![Workspace with services, form, projects and secrets](docs/images/workspace.png)
+
+## Quick start
+
+```
+sudo install -m 0755 maurice /usr/local/bin/maurice      # from `cargo build --release`
+sudo ln -sf maurice /usr/local/bin/marik
+sudo maurice host prepare                                # PostgreSQL, keys, journald, maurice.service
+sudo systemctl enable --now maurice                      # panel on 127.0.0.1:7700
+
+marik workspace create shop && marik plan apply <plan-id>
+```
+
+Full walkthrough, CLI reference and known limits: the
+[Alpha guide](https://github.com/kmaxxdev/Maurice-PaaS/wiki/Alpha-Guide).
 
 ## Why another panel
 
@@ -63,7 +93,7 @@ a runtime dependency.
 
 | Stage | Purpose | Status |
 |---|---|---|
-| **Alpha** | Panel → agent → Quadlet → rootless Podman works on a real server. Workspaces, deploy from image or Dockerfile, logs, networks, secrets, validator. | in progress, core done |
+| **Alpha** | Panel → agent → Quadlet → rootless Podman works on a real server. Workspaces, deploy from image or Dockerfile, logs, networks, secrets, validator. | **done, testing on real projects** |
 | **MVP** | Fit for production. Caddy with TLS, blue-green deploys, registry, webhooks, service catalogue, Telegram alerts, S3 backups, telemetry, auth. | — |
 | **Beta** | Full feature set. MCP server, built-in agent, remote dev workspaces, Cloudflare tunnels, log triage, Plane tracker. | — |
 | **Release** | Stabilisation. Docs, upgrade procedure, Podman compatibility matrix, regression tests. | — |
