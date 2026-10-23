@@ -50,6 +50,21 @@ maurice workspace delete <id> --purge     # destructive plan
 maurice plan apply <plan-id> --confirm    # marik refuses this one
 ```
 
+Services and secrets:
+
+```
+printf 's3cret' | marik secret set <ws> pg_admin         # encrypted in PostgreSQL, pushed to podman
+marik service upsert <ws> -f examples/postgres-service.json   # plan shows the unit diff
+marik plan apply <plan-id>                               # writes units, reloads
+marik service deploy <svc-id>  &&  marik plan apply <plan-id>  # starts, waits for healthy
+marik service unit <svc-id>  /  marik service logs <svc-id>
+maurice service delete <svc-id>  &&  maurice plan apply <plan-id> --confirm
+```
+
+Service definitions are proto JSON (`examples/*.json`): `imageRef`, `ports[]`, `env[]` with
+`literal`, `ref` (`{{postgres.url}}`) or `secretName`. Pre-1.0 the single migration may be edited
+in place; reset a dev database when it changes (`podman volume rm maurice-postgres-data` in the VM).
+
 In the VM: `scripts/vm-run.sh host prepare`, then start the panel as a transient unit and use the
 same commands over SSH (see `docs/notes/dev-vm.md`).
 

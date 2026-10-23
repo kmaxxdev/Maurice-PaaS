@@ -12,7 +12,11 @@ maurice-agent = { workspace = true }
 maurice-db = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
+maurice-quadlet = { workspace = true }
+chacha20poly1305 = { workspace = true }
+hex = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 connectrpc = { workspace = true }
 buffa = { workspace = true }
 buffa-types = { workspace = true }

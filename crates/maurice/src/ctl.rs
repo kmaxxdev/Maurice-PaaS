@@ -29,6 +29,50 @@ pub enum WorkspaceCommand {
 }
 
 #[derive(Subcommand)]
+pub enum ServiceCommand {
+    /// List services of a workspace.
+    List { workspace: String },
+    /// Show one service as JSON.
+    Get { id: String },
+    /// Show the unit file that is on disk for a service.
+    Unit { id: String },
+    /// Print recent journal lines of a service.
+    Logs {
+        id: String,
+        #[arg(long, default_value_t = 100)]
+        tail: u32,
+    },
+    /// Plan creating or replacing a service from a JSON definition (proto JSON, see examples/).
+    Upsert {
+        workspace: String,
+        #[arg(long, short = 'f')]
+        file: std::path::PathBuf,
+        #[arg(long, default_value = "default")]
+        project: String,
+    },
+    /// Plan starting (or restarting) a service from its units.
+    Deploy { id: String },
+    /// Plan deleting a service. Destructive.
+    Delete {
+        id: String,
+        #[arg(long)]
+        purge_volumes: bool,
+    },
+    /// Restart a service now (reversible, no plan).
+    Restart { id: String },
+    /// Stop a service now (reversible, no plan).
+    Stop { id: String },
+}
+
+#[derive(Subcommand)]
+pub enum SecretCommand {
+    /// List secret names and versions of a workspace.
+    List { workspace: String },
+    /// Set a secret value; reads the value from stdin.
+    Set { workspace: String, name: String },
+}
+
+#[derive(Subcommand)]
 pub enum PlanCommand {
     /// Show a plan.
     Get { id: String },
@@ -222,6 +266,201 @@ pub async fn plan(cmd: PlanCommand, server: &str, tier: Tier) -> anyhow::Result<
                 })
                 .await?;
             println!("plan {id} discarded");
+        }
+    }
+    Ok(())
+}
+
+pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
+    let client = ServicesClient::new(Client::plaintext(), config(server)?);
+    match cmd {
+        ServiceCommand::List { workspace } => {
+            let resp = client
+                .list(ListServicesRequest {
+                    workspace_id: workspace,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            if resp.services.is_empty() {
+                println!("no services");
+            }
+            for s in &resp.services {
+                let source = match &s.source {
+                    Some(maurice_api::proto::maurice::v1::__buffa::oneof::service::Source::ImageRef(r)) => r.clone(),
+                    Some(maurice_api::proto::maurice::v1::__buffa::oneof::service::Source::DockerfilePath(p)) => format!("build:{p}"),
+                    None => "-".into(),
+                };
+                let ports: Vec<String> = s
+                    .ports
+                    .iter()
+                    .map(|p| {
+                        if p.published {
+                            format!("{}→{}:{}", p.container_port, p.host_ip, p.host_port)
+                        } else {
+                            p.container_port.to_string()
+                        }
+                    })
+                    .collect();
+                println!(
+                    "{:<36} {:<14} {:<10} {:<40} ports {}",
+                    s.id,
+                    s.name,
+                    format!("{:?}", s.kind)
+                        .to_lowercase()
+                        .replace("service_kind_", ""),
+                    source,
+                    if ports.is_empty() {
+                        "-".to_string()
+                    } else {
+                        ports.join(",")
+                    }
+                );
+            }
+        }
+        ServiceCommand::Get { id } => {
+            let s = client
+                .get(GetServiceRequest {
+                    id,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_json(&s)?;
+        }
+        ServiceCommand::Unit { id } => {
+            let u = client
+                .get_unit(GetUnitRequest {
+                    service_id: id,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            println!(
+                "# {}{}",
+                u.path,
+                if u.deployment_id.is_empty() {
+                    String::new()
+                } else {
+                    format!("  (deployment {})", u.deployment_id)
+                }
+            );
+            if u.content.is_empty() {
+                println!("# (no unit on disk yet; apply an upsert plan)");
+            } else {
+                print!("{}", u.content);
+            }
+        }
+        ServiceCommand::Logs { id, tail } => {
+            let mut stream = client
+                .logs(LogsRequest {
+                    service_id: id,
+                    tail,
+                    ..Default::default()
+                })
+                .await?;
+            while let Some(msg) = stream.message().await? {
+                let l = msg.to_owned_message();
+                let secs = l.time.as_option().map(|t| t.seconds).unwrap_or(0);
+                println!("{secs} [{}] {}", l.priority, l.message);
+            }
+        }
+        ServiceCommand::Upsert {
+            workspace,
+            file,
+            project,
+        } => {
+            let text = std::fs::read_to_string(&file)?;
+            let svc: Service = serde_json::from_str(&text)?;
+            let p = client
+                .plan_upsert(PlanUpsertServiceRequest {
+                    workspace_id: workspace,
+                    project,
+                    service: svc.into(),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        ServiceCommand::Deploy { id } => {
+            let p = client
+                .plan_deploy(PlanDeployRequest {
+                    service_id: id,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        ServiceCommand::Delete { id, purge_volumes } => {
+            let p = client
+                .plan_delete(PlanDeleteServiceRequest {
+                    id,
+                    purge_volumes,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        ServiceCommand::Restart { id } => {
+            client
+                .restart(RestartRequest {
+                    service_id: id.clone(),
+                    ..Default::default()
+                })
+                .await?;
+            println!("restarted {id}");
+        }
+        ServiceCommand::Stop { id } => {
+            client
+                .stop(StopRequest {
+                    service_id: id.clone(),
+                    ..Default::default()
+                })
+                .await?;
+            println!("stopped {id}");
+        }
+    }
+    Ok(())
+}
+
+pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
+    let client = SecretsClient::new(Client::plaintext(), config(server)?);
+    match cmd {
+        SecretCommand::List { workspace } => {
+            let resp = client
+                .list(ListSecretsRequest {
+                    workspace_id: workspace,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            if resp.secrets.is_empty() {
+                println!("no secrets");
+            }
+            for s in &resp.secrets {
+                println!("{:<36} {:<24} v{}", s.id, s.name, s.version);
+            }
+        }
+        SecretCommand::Set { workspace, name } => {
+            use std::io::Read;
+            let mut value = Vec::new();
+            std::io::stdin().read_to_end(&mut value)?;
+            while value.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                value.pop();
+            }
+            let info = client
+                .set(SetSecretRequest {
+                    workspace_id: workspace,
+                    name: name.clone(),
+                    value: value.into(),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            println!("secret {name} stored as version {}", info.version);
         }
     }
     Ok(())

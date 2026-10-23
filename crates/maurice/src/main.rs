@@ -57,6 +57,16 @@ enum Command {
         #[command(subcommand)]
         command: ctl::PlanCommand,
     },
+    /// Services (through the panel).
+    Service {
+        #[command(subcommand)]
+        command: ctl::ServiceCommand,
+    },
+    /// Secrets (through the panel).
+    Secret {
+        #[command(subcommand)]
+        command: ctl::SecretCommand,
+    },
     /// Render the Quadlet units a workspace definition would produce, without touching the host.
     Render {
         /// Path to a workspace definition (JSON).
@@ -123,6 +133,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Workspace { command } => ctl::workspace(command, &cli.server, tier).await?,
         Command::Plan { command } => ctl::plan(command, &cli.server, tier).await?,
+        Command::Service { command } => ctl::service(command, &cli.server, tier).await?,
+        Command::Secret { command } => ctl::secret(command, &cli.server, tier).await?,
         Command::Serve {
             listen,
             database_url,
@@ -139,6 +151,15 @@ async fn main() -> anyhow::Result<()> {
                     },
                 )?,
             };
+            let master_key_hex = std::env::var("MAURICE_MASTER_KEY")
+                .ok()
+                .or_else(|| read_env_file_var("/etc/maurice/maurice.env", "MAURICE_MASTER_KEY"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no MAURICE_MASTER_KEY; run `maurice host prepare` or set the variable"
+                    )
+                })?;
+            let master_key = maurice_api::crypto::MasterKey::from_hex(&master_key_hex)?;
             let pool = maurice_db::connect(&database_url).await?;
             let agent: Arc<dyn maurice_agent::Agent> = if dry_run {
                 tracing::warn!("dry-run agent: host operations are recorded, not performed");
@@ -150,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
             let state = Arc::new(maurice_api::services::State::new(
                 agent,
                 maurice_db::Store::new(pool),
+                master_key,
             ));
             let app = maurice_api::app(state);
             let listener = tokio::net::TcpListener::bind(&listen).await?;

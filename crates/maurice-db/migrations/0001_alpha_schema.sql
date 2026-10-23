@@ -48,7 +48,7 @@ create table ports (
     service_id      uuid not null references services(id) on delete cascade,
     container_port  integer not null check (container_port between 1 and 65535),
     published       boolean not null default false,
-    host_ip         inet,
+    host_ip         text,
     host_port       integer check (host_port between 1 and 65535),
     unique (service_id, container_port),
     check ((published and host_ip is not null and host_port is not null) or (not published and host_ip is null and host_port is null))
@@ -74,11 +74,11 @@ create table secrets (
     encrypted_value bytea not null,
     version         integer not null default 1,
     created_at      timestamptz not null default now(),
-    unique (workspace_id, service_id, name)
+    unique (workspace_id, name, version)
 );
 
-alter table env_vars add constraint env_vars_secret_fk foreign key (secret_id) references secrets(id);
-alter table projects add constraint projects_git_key_fk foreign key (git_key_secret_id) references secrets(id);
+alter table env_vars add constraint env_vars_secret_fk foreign key (secret_id) references secrets(id) on delete cascade;
+alter table projects add constraint projects_git_key_fk foreign key (git_key_secret_id) references secrets(id) on delete set null;
 
 create table plans (
     id            uuid primary key,

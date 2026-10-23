@@ -1,0 +1,12 @@
+{
+  "name": "web",
+  "kind": "SERVICE_KIND_STATELESS",
+  "imageRef": "docker.io/library/nginx:1.27-alpine",
+  "ports": [{ "containerPort": 80, "published": true, "hostIp": "127.0.0.1", "hostPort": 18080 }],
+  "env": [
+    { "key": "DATABASE_URL", "ref": "{{postgres.url}}" },
+    { "key": "APP_ENV", "literal": "dev" }
+  ],
+  "cpu": 0.5,
+  "memory": 268435456
+}

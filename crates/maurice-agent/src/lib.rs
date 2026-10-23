@@ -75,6 +75,19 @@ pub trait Agent: Send + Sync {
 
     // --- podman secrets of that user; the value is passed on stdin, never on argv ---
     async fn set_secret(&self, user: &UserRef, name: &str, value: &[u8]) -> Result<()>;
+
+    // --- journal of one unit of that user, newest last ---
+    async fn read_journal(&self, user: &UserRef, unit: &str, tail: u32)
+    -> Result<Vec<JournalLine>>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JournalLine {
+    /// Microseconds since the Unix epoch.
+    pub realtime_usec: u64,
+    pub priority: u8,
+    pub identifier: String,
+    pub message: String,
 }
 
 /// One recorded call, for tests, dry runs and the audit log.
@@ -217,5 +230,13 @@ impl Agent for DryRunAgent {
             name: name.into(),
         });
         Ok(())
+    }
+    async fn read_journal(
+        &self,
+        _user: &UserRef,
+        _unit: &str,
+        _tail: u32,
+    ) -> Result<Vec<JournalLine>> {
+        Ok(vec![])
     }
 }
