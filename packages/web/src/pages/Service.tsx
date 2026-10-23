@@ -5,9 +5,11 @@ import { fromJson, toJson } from "@bufbuild/protobuf";
 import type { Plan } from "../gen/maurice/v1/common_pb";
 import { ServiceSchema } from "../gen/maurice/v1/services_pb";
 import { ServiceKind } from "../gen/maurice/v1/common_pb";
-import type { LogLine, Service } from "../gen/maurice/v1/services_pb";
+import type { LogLine, Service, StatsSample } from "../gen/maurice/v1/services_pb";
 import { workspaces, services, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
+import { ServiceForm } from "../components/ServiceForm";
+import { onCleanup, createEffect } from "solid-js";
 import { stateTone } from "./Workspace";
 
 export function ServiceView() {
@@ -18,6 +20,8 @@ export function ServiceView() {
   const [status, { refetch: refetchStatus }] = createResource(() => params.id, async (id) => { try { return await services.getStatus({ serviceId: id }); } catch { return undefined; } });
   const [unit, { refetch: refetchUnit }] = createResource(() => params.id, (id) => services.getUnit({ serviceId: id }));
   const [tail, setTail] = createSignal(200);
+  const [follow, setFollow] = createSignal(false);
+  const [liveLines, setLiveLines] = createSignal<LogLine[]>([]);
   const [logs, { refetch: refetchLogs }] = createResource(
     () => [params.id, tail()] as const,
     async ([id, n]) => {
@@ -26,6 +30,41 @@ export function ServiceView() {
       return out;
     },
   );
+  // Follow mode: a long-lived stream appended to the tail; aborted when switched off or on leave.
+  let followAbort: AbortController | undefined;
+  createEffect(() => {
+    followAbort?.abort();
+    followAbort = undefined;
+    setLiveLines([]);
+    if (!follow()) return;
+    const ac = new AbortController();
+    followAbort = ac;
+    (async () => {
+      try {
+        let skip = tail();
+        for await (const l of services.logs({ serviceId: params.id, tail: tail(), follow: true }, { signal: ac.signal })) {
+          if (skip > 0) { skip--; continue; }
+          setLiveLines((prev) => [...prev.slice(-1000), l]);
+        }
+      } catch { /* aborted */ }
+    })();
+  });
+  onCleanup(() => followAbort?.abort());
+  // Live stats while the overview is open.
+  const [stats, setStats] = createSignal<StatsSample | null>(null);
+  let statsAbort: AbortController | undefined;
+  createEffect(() => {
+    const id = params.id;
+    statsAbort?.abort();
+    const ac = new AbortController();
+    statsAbort = ac;
+    (async () => {
+      try {
+        for await (const s of services.stats({ serviceId: id }, { signal: ac.signal })) setStats(s);
+      } catch { /* aborted */ }
+    })();
+  });
+  onCleanup(() => statsAbort?.abort());
   const [plan, setPlan] = createSignal<Plan | null>(null);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal("");
@@ -111,6 +150,9 @@ export function ServiceView() {
                       <tr><th>Image</th><td class="mono">{status()?.image || (s().source.case === "imageRef" ? s().source.value : "-")}</td></tr>
                       <tr><th>Deployment</th><td class="mono small">{status()?.deploymentId || "none yet"}</td></tr>
                       <tr><th>Since</th><td>{status()?.since ? new Date(Number(status()!.since!.seconds) * 1000).toLocaleString() : "-"}</td></tr>
+                      <tr><th>CPU</th><td>{stats() ? (stats()!.memoryBytes === 0n && stats()!.cpuCores === 0 ? <span class="muted">not running</span> : `${stats()!.cpuCores.toFixed(2)} cores`) : <span class="muted">…</span>}</td></tr>
+                      <tr><th>Memory</th><td>{stats() && stats()!.memoryBytes > 0n ? `${(Number(stats()!.memoryBytes) / 1048576).toFixed(0)} MiB` : "-"}</td></tr>
+                      <tr><th>Network</th><td class="mono small">{stats() && stats()!.memoryBytes > 0n ? `rx ${Number(stats()!.netRxBytes)} · tx ${Number(stats()!.netTxBytes)} bytes` : "-"}</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -184,11 +226,14 @@ export function ServiceView() {
               </select>
             </label>
             <button onClick={() => refetchLogs()}>Refresh</button>
+            <label style={{ "flex-direction": "row", display: "flex", gap: "6px", "align-items": "center" }}>
+              <input type="checkbox" id="log-follow" checked={follow()} onChange={(e) => setFollow(e.currentTarget.checked)} /> follow
+            </label>
           </div>
           <Show when={!logs.loading} fallback={<p class="muted">Loading…</p>}>
             <Show when={logs()?.length} fallback={<div class="empty">No journal lines for this unit.</div>}>
               <pre class="log">
-                <For each={logs()}>
+                <For each={[...(logs() ?? []), ...liveLines()]}>
                   {(l) => (
                     <div class={`p${l.priority}`}>
                       <span class="t">{fmtTime(l)}</span> {l.message}
@@ -201,14 +246,32 @@ export function ServiceView() {
         </Tabs.Content>
 
         <Tabs.Content value="definition">
-          <form onSubmit={planUpsert} style={{ display: "grid", gap: "10px" }}>
-            <p class="muted small" style={{ margin: 0 }}>Edit and plan: the plan shows the unit diff, nothing changes until it is applied.</p>
+          <p class="muted small" style={{ margin: "0 0 10px" }}>Edit and plan: the plan shows the unit diff, nothing changes until it is applied.</p>
+          <Show when={svc()}>
+            {(s) => (
+              <ServiceForm
+                initial={s()}
+                onSubmit={async (def) => {
+                  setError("");
+                  try {
+                    setPlan(await services.planUpsert({ workspaceId: params.wsId, project: "", service: def }));
+                  } catch (err) {
+                    setError(errorText(err));
+                  }
+                }}
+              />
+            )}
+          </Show>
+          <details style={{ "margin-top": "14px" }}>
+            <summary class="muted small">JSON</summary>
+          <form onSubmit={planUpsert} style={{ display: "grid", gap: "10px", "margin-top": "8px" }}>
             <textarea id="def-json" class="mono" value={definitionJson()} onInput={(e) => setJson(e.currentTarget.value)} spellcheck={false} />
             <div class="row">
               <button class="primary" type="submit">Plan</button>
               <button type="button" onClick={() => setJson(null)}>Reset</button>
             </div>
           </form>
+          </details>
         </Tabs.Content>
       </Tabs>
 

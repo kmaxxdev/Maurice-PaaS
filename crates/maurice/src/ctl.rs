@@ -41,6 +41,16 @@ pub enum ServiceCommand {
         id: String,
         #[arg(long, default_value_t = 100)]
         tail: u32,
+        /// Keep printing new lines until interrupted.
+        #[arg(long, short = 'f')]
+        follow: bool,
+    },
+    /// Stream resource usage of a service's container.
+    Stats {
+        id: String,
+        /// Stop after this many samples (0 = until interrupted).
+        #[arg(long, default_value_t = 5)]
+        count: u32,
     },
     /// Plan creating or replacing a service from a JSON definition (proto JSON, see examples/).
     Upsert {
@@ -371,11 +381,44 @@ pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::
                 print!("{}", u.content);
             }
         }
-        ServiceCommand::Logs { id, tail } => {
+        ServiceCommand::Stats { id, count } => {
+            let mut stream = client
+                .stats(StatsRequest {
+                    service_id: id,
+                    ..Default::default()
+                })
+                .await?;
+            let mut n = 0;
+            println!(
+                "{:<10} {:>8} {:>10} {:>12} {:>12}",
+                "time", "cpu", "memory", "net rx", "net tx"
+            );
+            while let Some(msg) = stream.message().await? {
+                let s = msg.to_owned_message();
+                let t = s.time.as_option().map(|t| t.seconds).unwrap_or(0);
+                if s.memory_bytes == 0 && s.cpu_cores == 0.0 {
+                    println!("{t:<10} (not running)");
+                } else {
+                    println!(
+                        "{t:<10} {:>7.2}c {:>6} MiB {:>12} {:>12}",
+                        s.cpu_cores,
+                        s.memory_bytes / 1_048_576,
+                        s.net_rx_bytes,
+                        s.net_tx_bytes
+                    );
+                }
+                n += 1;
+                if count > 0 && n >= count {
+                    break;
+                }
+            }
+        }
+        ServiceCommand::Logs { id, tail, follow } => {
             let mut stream = client
                 .logs(LogsRequest {
                     service_id: id,
                     tail,
+                    follow,
                     ..Default::default()
                 })
                 .await?;
