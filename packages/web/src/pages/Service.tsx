@@ -9,6 +9,7 @@ import type { LogLine, Service, StatsSample } from "../gen/maurice/v1/services_p
 import { workspaces, services, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
 import { ServiceForm } from "../components/ServiceForm";
+import { Sparkline, Meter } from "../components/Sparkline";
 import { onCleanup, createEffect } from "solid-js";
 import { stateTone } from "./Workspace";
 
@@ -52,6 +53,10 @@ export function ServiceView() {
   onCleanup(() => followAbort?.abort());
   // Live stats while the overview is open.
   const [stats, setStats] = createSignal<StatsSample | null>(null);
+  const [cpuHist, setCpuHist] = createSignal<number[]>([]);
+  const [memHist, setMemHist] = createSignal<number[]>([]);
+  const [netHist, setNetHist] = createSignal<number[]>([]);
+  let lastNet: { t: number; rx: number; tx: number } | null = null;
   let statsAbort: AbortController | undefined;
   createEffect(() => {
     const id = params.id;
@@ -60,7 +65,19 @@ export function ServiceView() {
     statsAbort = ac;
     (async () => {
       try {
-        for await (const s of services.stats({ serviceId: id }, { signal: ac.signal })) setStats(s);
+        for await (const s of services.stats({ serviceId: id }, { signal: ac.signal })) {
+          setStats(s);
+          const running = s.memoryBytes > 0n;
+          setCpuHist((h) => [...h.slice(-59), running ? s.cpuCores : 0]);
+          setMemHist((h) => [...h.slice(-59), running ? Number(s.memoryBytes) / 1048576 : 0]);
+          const now = Number(s.time?.seconds ?? 0n);
+          const rx = Number(s.netRxBytes), tx = Number(s.netTxBytes);
+          if (lastNet && now > lastNet.t && running) {
+            const kbps = ((rx - lastNet.rx + tx - lastNet.tx) / (now - lastNet.t)) / 1024;
+            setNetHist((h) => [...h.slice(-59), Math.max(0, kbps)]);
+          }
+          lastNet = running ? { t: now, rx, tx } : null;
+        }
       } catch { /* aborted */ }
     })();
   });
@@ -150,11 +167,24 @@ export function ServiceView() {
                       <tr><th>Image</th><td class="mono">{status()?.image || (s().source.case === "imageRef" ? s().source.value : "-")}</td></tr>
                       <tr><th>Deployment</th><td class="mono small">{status()?.deploymentId || "none yet"}</td></tr>
                       <tr><th>Since</th><td>{status()?.since ? new Date(Number(status()!.since!.seconds) * 1000).toLocaleString() : "-"}</td></tr>
-                      <tr><th>CPU</th><td>{stats() ? (stats()!.memoryBytes === 0n && stats()!.cpuCores === 0 ? <span class="muted">not running</span> : `${stats()!.cpuCores.toFixed(2)} cores`) : <span class="muted">…</span>}</td></tr>
-                      <tr><th>Memory</th><td>{stats() && stats()!.memoryBytes > 0n ? `${(Number(stats()!.memoryBytes) / 1048576).toFixed(0)} MiB` : "-"}</td></tr>
-                      <tr><th>Network</th><td class="mono small">{stats() && stats()!.memoryBytes > 0n ? `rx ${Number(stats()!.netRxBytes)} · tx ${Number(stats()!.netTxBytes)} bytes` : "-"}</td></tr>
                     </tbody>
                   </table>
+                </div>
+                <div class="card" style={{ display: "grid", gap: "12px", "align-content": "start" }}>
+                  <h3>Usage <span class="muted small" style={{ "font-weight": "400" }}>live, 2 s samples</span></h3>
+                  <Show when={stats()} fallback={<p class="muted small">Waiting for the first sample…</p>}>
+                    <Show when={stats()!.memoryBytes > 0n || cpuHist().some((v) => v > 0)} fallback={<p class="muted small">Not running.</p>}>
+                      <Sparkline label="CPU" values={cpuHist()} unit=" cores" max={s().cpu || undefined} />
+                      <Sparkline label="Memory" values={memHist()} unit=" MiB" max={s().memory ? Number(s().memory) / 1048576 : undefined} />
+                      <Sparkline label="Network" values={netHist()} unit=" KiB/s" />
+                      <Show when={s().memory}>
+                        <Meter label="Memory limit" value={Number(stats()!.memoryBytes) / 1048576} max={Number(s().memory) / 1048576} format={(v) => `${v.toFixed(0)} MiB`} />
+                      </Show>
+                      <Show when={s().cpu}>
+                        <Meter label="CPU quota" value={stats()!.cpuCores} max={s().cpu} format={(v) => `${v.toFixed(2)} c`} />
+                      </Show>
+                    </Show>
+                  </Show>
                 </div>
                 <div class="card">
                   <h3>Ports</h3>

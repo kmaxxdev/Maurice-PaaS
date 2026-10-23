@@ -394,6 +394,7 @@ async fn prepare_host() -> anyhow::Result<()> {
     install_panel_postgres().await?;
     ensure_master_key()?;
     configure_journald().await?;
+    install_panel_unit().await?;
     println!("host prepared");
     Ok(())
 }
@@ -556,6 +557,38 @@ Compress=yes\n";
         println!("journald: limits applied (4G max, 1 month retention, rate limit per service)");
     } else {
         println!("journald: limits already in place");
+    }
+    Ok(())
+}
+
+/// The panel itself as a system service, so it survives reboots and restarts on failure.
+async fn install_panel_unit() -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?.to_string_lossy().into_owned();
+    let unit = format!(
+        "# Installed by `maurice host prepare`.\n\
+[Unit]\n\
+Description=Maurice PaaS panel\n\
+After=network-online.target maurice-postgres.service\n\
+Wants=network-online.target\n\
+Requires=maurice-postgres.service\n\
+\n\
+[Service]\n\
+EnvironmentFile=/etc/maurice/maurice.env\n\
+Environment=RUST_LOG=info\n\
+ExecStart={exe} serve\n\
+Restart=on-failure\n\
+RestartSec=3\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n"
+    );
+    if write_if_different("/etc/systemd/system/maurice.service", &unit)? {
+        run_root("systemctl", &["daemon-reload"]).await?;
+        println!(
+            "panel: /etc/systemd/system/maurice.service written (start with `systemctl enable --now maurice`)"
+        );
+    } else {
+        println!("panel: unit already in place");
     }
     Ok(())
 }
