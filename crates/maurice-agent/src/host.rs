@@ -4,7 +4,7 @@
 //! argument is validated before it reaches a command line, and no command is
 //! ever composed from free text.
 
-use crate::{Agent, AgentError, NewUser, Result, UnitStatus, UserRef};
+use crate::{Agent, AgentError, JournalLine, NewUser, Result, UnitStatus, UserRef};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
@@ -444,6 +444,61 @@ impl Agent for HostAgent {
         self.run_as_user_with_stdin(user, &["podman", "secret", "create", name, "-"], value)
             .await
             .map(drop)
+    }
+
+    async fn read_journal(
+        &self,
+        user: &UserRef,
+        unit: &str,
+        tail: u32,
+    ) -> Result<Vec<JournalLine>> {
+        validate_unit_name(unit)?;
+        let uid = user.uid.to_string();
+        let n = tail.clamp(1, 5000).to_string();
+        let out = self
+            .run(
+                "journalctl",
+                &[
+                    "--no-pager",
+                    "-o",
+                    "json",
+                    "-n",
+                    &n,
+                    &format!("_UID={uid}"),
+                    &format!("_SYSTEMD_USER_UNIT={unit}"),
+                ],
+            )
+            .await?;
+        let mut lines = Vec::new();
+        for raw in out.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+                continue;
+            };
+            let msg = match &v["MESSAGE"] {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Array(bytes) => String::from_utf8_lossy(
+                    &bytes
+                        .iter()
+                        .filter_map(|b| b.as_u64().map(|b| b as u8))
+                        .collect::<Vec<_>>(),
+                )
+                .into_owned(),
+                _ => String::new(),
+            };
+            lines.push(JournalLine {
+                realtime_usec: v["__REALTIME_TIMESTAMP"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                priority: v["PRIORITY"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(6),
+                identifier: v["SYSLOG_IDENTIFIER"].as_str().unwrap_or("").to_string(),
+                message: msg,
+            });
+        }
+        Ok(lines)
     }
 
     async fn unit_status(&self, user: &UserRef, unit: &str) -> Result<UnitStatus> {

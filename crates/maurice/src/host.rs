@@ -391,6 +391,7 @@ async fn prepare_host() -> anyhow::Result<()> {
         println!("apparmor: no pasta profile on this host, nothing to do");
     }
     install_panel_postgres().await?;
+    ensure_master_key()?;
     println!("host prepared");
     Ok(())
 }
@@ -519,4 +520,18 @@ fn random_token(len: usize) -> String {
     buf.iter()
         .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
         .collect()
+}
+
+/// Append `MAURICE_MASTER_KEY` to the env file if it is missing. Losing this key
+/// makes stored secret values unreadable; the file is root-only.
+fn ensure_master_key() -> anyhow::Result<()> {
+    let env_path = "/etc/maurice/maurice.env";
+    let text = std::fs::read_to_string(env_path).unwrap_or_default();
+    if text.lines().any(|l| l.starts_with("MAURICE_MASTER_KEY=")) {
+        return Ok(());
+    }
+    let key = maurice_api::crypto::MasterKey::generate_hex();
+    std::fs::write(env_path, format!("{text}MAURICE_MASTER_KEY={key}\n"))?;
+    println!("secrets: master key written to {env_path}");
+    Ok(())
 }

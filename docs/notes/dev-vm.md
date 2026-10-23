@@ -61,3 +61,12 @@ Verified: create plan → apply creates `ws-shop` through the agent and stores t
 the destructive delete plan, `maurice` needs `--confirm`; after apply the host has no user, home or
 subuid entry. Quadlet-generated units cannot be `systemctl enable`d; `[Install]` in the unit file
 does that, so the installer only starts them.
+
+## Services through the panel, 2026-10-23
+
+Verified end to end on the VM: secret set → service upsert (plan shows the full unit as a diff) →
+apply writes `postgres.container`, the volume and the network unit → deploy plan starts the unit and
+blocks until healthy (~40 s) → `service logs` reads the user journal → a second service resolves
+`{{postgres.url}}` and publishes `127.0.0.1:18080`, `curl` answers 200 → re-upsert without changes
+plans nothing → `marik` refuses the destructive delete, `maurice --confirm` applies it → deleting the
+workspace with a running service and secret-backed env leaves no user, subuid, home or container.

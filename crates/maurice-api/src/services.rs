@@ -2,13 +2,16 @@
 //! agent. A plan is stored with a typed payload (`PlanPayload`) that `apply`
 //! executes step by step while streaming events.
 
+use crate::crypto::MasterKey;
+use crate::model_map;
 use crate::proto::maurice::v1::*;
 use connectrpc::{
     ConnectError, ErrorCode, RequestContext, Response, ServiceRequest, ServiceResult, ServiceStream,
 };
 use maurice_agent::{Agent, NewUser, UserRef};
-use maurice_db::{PlanRow, Store, WorkspaceRow};
+use maurice_db::{DeploymentRow, PlanRow, Store, WorkspaceRow};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -16,15 +19,17 @@ use uuid::Uuid;
 pub struct State {
     pub agent: Arc<dyn Agent>,
     pub store: Store,
+    pub master_key: MasterKey,
     /// Where workspace homes live.
     pub home_root: String,
 }
 
 impl State {
-    pub fn new(agent: Arc<dyn Agent>, store: Store) -> Self {
+    pub fn new(agent: Arc<dyn Agent>, store: Store, master_key: MasterKey) -> Self {
         Self {
             agent,
             store,
+            master_key,
             home_root: "/srv/ws".into(),
         }
     }
@@ -49,6 +54,38 @@ pub enum PlanPayload {
         uid: i32,
         purge: bool,
     },
+    /// Write rows and units; does not start anything.
+    UpsertService {
+        workspace_id: Uuid,
+        project_id: Uuid,
+        project_name: String,
+        service: maurice_db::ServiceRow,
+        ports: Vec<maurice_db::PortRow>,
+        env: Vec<maurice_db::EnvVarRow>,
+        units: Vec<UnitText>,
+        /// Unit of this service to restart if it is already running.
+        running_unit: Option<String>,
+    },
+    /// Start or restart from the current units.
+    DeployService {
+        workspace_id: Uuid,
+        service_id: Uuid,
+        unit: String,
+        image: String,
+    },
+    DeleteService {
+        workspace_id: Uuid,
+        service_id: Uuid,
+        unit: String,
+        unit_files: Vec<String>,
+        purge_volumes: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnitText {
+    pub file_name: String,
+    pub content: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,9 +110,29 @@ struct StoredFinding {
     target: String,
 }
 
+impl From<&maurice_core::Finding> for StoredFinding {
+    fn from(f: &maurice_core::Finding) -> Self {
+        Self {
+            severity: match f.severity {
+                maurice_core::Severity::Error => "error",
+                maurice_core::Severity::Warning => "warning",
+                maurice_core::Severity::Info => "info",
+            }
+            .into(),
+            code: f.code.into(),
+            message: f.message.clone(),
+            target: f.target.clone(),
+        }
+    }
+}
+
 fn internal(e: impl std::fmt::Display) -> ConnectError {
     tracing::error!(error = %e, "internal");
     ConnectError::new(ErrorCode::Internal, e.to_string())
+}
+
+fn invalid(msg: impl Into<String>) -> ConnectError {
+    ConnectError::new(ErrorCode::InvalidArgument, msg)
 }
 
 fn not_found(what: &str, id: &str) -> ConnectError {
@@ -83,22 +140,14 @@ fn not_found(what: &str, id: &str) -> ConnectError {
 }
 
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid, ConnectError> {
-    Uuid::parse_str(s).map_err(|_| {
-        ConnectError::new(
-            ErrorCode::InvalidArgument,
-            format!("{what} id must be a uuid"),
-        )
-    })
+    Uuid::parse_str(s).map_err(|_| invalid(format!("{what} id must be a uuid")))
 }
 
 fn env_to_str(e: buffa::EnumValue<Env>) -> Result<&'static str, ConnectError> {
     match e.as_known() {
         Some(Env::ENV_PROD) => Ok("prod"),
         Some(Env::ENV_DEV) => Ok("dev"),
-        _ => Err(ConnectError::new(
-            ErrorCode::InvalidArgument,
-            "env must be ENV_PROD or ENV_DEV",
-        )),
+        _ => Err(invalid("env must be ENV_PROD or ENV_DEV")),
     }
 }
 
@@ -212,6 +261,203 @@ async fn store_plan(
     state.store.insert_plan(&row).await.map_err(internal)?;
     plan_to_proto(&row)
 }
+
+/// Line-based diff for unit files: enough to show what changes on disk.
+fn unit_diff(old: Option<&str>, new: &str) -> String {
+    let Some(old) = old else {
+        return new
+            .lines()
+            .map(|l| format!("+{l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    };
+    if old == new {
+        return String::new();
+    }
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let mut out = Vec::new();
+    for l in &old_lines {
+        if !new_lines.contains(l) {
+            out.push(format!("-{l}"));
+        }
+    }
+    for l in &new_lines {
+        if !old_lines.contains(l) {
+            out.push(format!("+{l}"));
+        }
+    }
+    out.join("\n")
+}
+
+/// Everything the handlers need about one workspace, loaded in one go.
+struct Loaded {
+    ws: WorkspaceRow,
+    user: UserRef,
+    projects: Vec<maurice_db::ProjectRow>,
+    services: Vec<maurice_db::ServiceFull>,
+    secret_names: HashMap<Uuid, String>,
+    secret_ids: HashMap<String, Uuid>,
+}
+
+impl Loaded {
+    fn secret_name(&self) -> impl Fn(Uuid) -> Option<String> + '_ {
+        move |id| self.secret_names.get(&id).cloned()
+    }
+    fn core(&self) -> maurice_core::Workspace {
+        model_map::workspace_to_core(
+            &self.ws,
+            &self.projects,
+            &self.services,
+            &self.secret_name(),
+        )
+    }
+}
+
+async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError> {
+    let Some(ws) = state
+        .store
+        .get_workspace(workspace_id)
+        .await
+        .map_err(internal)?
+    else {
+        return Err(not_found("workspace", &workspace_id.to_string()));
+    };
+    let projects = state.store.list_projects(ws.id).await.map_err(internal)?;
+    let services = state.store.list_services(ws.id).await.map_err(internal)?;
+    let secrets = state.store.list_secrets(ws.id).await.map_err(internal)?;
+    let mut secret_names = HashMap::new();
+    let mut secret_ids = HashMap::new();
+    for s in &secrets {
+        secret_names.insert(s.id, s.name.clone());
+        secret_ids.insert(s.name.clone(), s.id);
+    }
+    // Env rows may point at older versions of a secret; map those ids too.
+    for svc in &services {
+        for e in &svc.env {
+            if let Some(sid) = e.secret_id
+                && !secret_names.contains_key(&sid)
+                && let Some(row) = state.store.get_secret(sid).await.map_err(internal)?
+            {
+                secret_names.insert(sid, row.name);
+            }
+        }
+    }
+    let user = UserRef {
+        name: ws.unix_user.clone(),
+        uid: ws.uid as u32,
+    };
+    Ok(Loaded {
+        ws,
+        user,
+        projects,
+        services,
+        secret_names,
+        secret_ids,
+    })
+}
+
+/// Render every unit of a service against the full workspace model.
+fn render_units(
+    ws: &maurice_core::Workspace,
+    svc: &maurice_core::Service,
+    image: &str,
+    version: &str,
+) -> Result<Vec<UnitText>, ConnectError> {
+    let mut units = Vec::new();
+    for v in maurice_quadlet::render_volumes(svc) {
+        units.push(UnitText {
+            file_name: v.file_name,
+            content: v.content,
+        });
+    }
+    let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
+        workspace: ws,
+        service: svc,
+        image,
+        version,
+        resolve_ref: &|r| resolve_ref(ws, r),
+    })
+    .map_err(|e| invalid(e.to_string()))?;
+    units.push(UnitText {
+        file_name: unit.file_name,
+        content: unit.content,
+    });
+    Ok(units)
+}
+
+/// `{{svc.host}}`, `{{svc.port}}`, and `{{svc.url}}` for well-known images.
+fn resolve_ref(ws: &maurice_core::Workspace, r: &str) -> Option<String> {
+    let (svc_name, field) = maurice_core::validate::parse_ref(r)?;
+    let svc = ws.services().find(|s| s.name == svc_name)?;
+    let port = svc.ports.first().map(|p| p.container_port);
+    match field {
+        "host" => Some(svc.name.clone()),
+        "port" => port.map(|p| p.to_string()),
+        "url" => {
+            let image = match &svc.source {
+                maurice_core::Source::Image { reference } => reference.as_str(),
+                _ => "",
+            };
+            if image.contains("postgres") {
+                Some(format!(
+                    "postgres://postgres@{}:{}/postgres",
+                    svc.name,
+                    port.unwrap_or(5432)
+                ))
+            } else if image.contains("dragonfly")
+                || image.contains("valkey")
+                || image.contains("redis")
+            {
+                Some(format!("redis://{}:{}", svc.name, port.unwrap_or(6379)))
+            } else {
+                port.map(|p| format!("http://{}:{p}", svc.name))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn image_of(svc: &maurice_core::Service, ws_name: &str) -> String {
+    match &svc.source {
+        maurice_core::Source::Image { reference } => reference.clone(),
+        maurice_core::Source::Build { .. } => format!("localhost/{ws_name}/{}:dev", svc.name),
+    }
+}
+
+fn core_workspace_shell(ws: &WorkspaceRow) -> maurice_core::Workspace {
+    maurice_core::Workspace {
+        name: ws.name.clone(),
+        unix_user: ws.unix_user.clone(),
+        uid: ws.uid as u32,
+        subuid_start: ws.subuid_start as u32,
+        subuid_len: ws.subuid_len as u32,
+        home: ws.home.clone(),
+        env: if ws.env == "prod" {
+            maurice_core::Env::Prod
+        } else {
+            maurice_core::Env::Dev
+        },
+        cpu_slice: ws.cpu_slice.clone(),
+        projects: vec![],
+    }
+}
+
+/// Health checks for well-known images so `Notify=healthy` works out of the box.
+fn default_health_cmd(image: Option<&str>) -> Option<String> {
+    let i = image?;
+    if i.contains("postgres") {
+        Some("pg_isready -U postgres".into())
+    } else if i.contains("dragonfly") || i.contains("valkey") || i.contains("redis") {
+        Some("redis-cli ping".into())
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+// ---------------------------------------------------------------------------
 
 pub struct WorkspacesSvc {
     pub state: Arc<State>,
@@ -337,6 +583,489 @@ impl Workspaces for WorkspacesSvc {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+pub struct ServicesSvc {
+    pub state: Arc<State>,
+}
+
+impl ServicesSvc {
+    async fn service_and_workspace(
+        &self,
+        id: &str,
+    ) -> Result<(maurice_db::ServiceFull, Loaded), ConnectError> {
+        let sid = parse_uuid(id, "service")?;
+        let Some(full) = self.state.store.get_service(sid).await.map_err(internal)? else {
+            return Err(not_found("service", id));
+        };
+        let loaded = load(&self.state, full.project.workspace_id).await?;
+        Ok((full, loaded))
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl Services for ServicesSvc {
+    async fn list(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, ListServicesRequest>,
+    ) -> ServiceResult<ListServicesResponse> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        let name = loaded.secret_name();
+        Response::ok(ListServicesResponse {
+            services: loaded
+                .services
+                .iter()
+                .map(|s| model_map::service_to_proto(s, &name))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    async fn get(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, GetServiceRequest>,
+    ) -> ServiceResult<Service> {
+        let (full, loaded) = self.service_and_workspace(req.id).await?;
+        Response::ok(model_map::service_to_proto(&full, &loaded.secret_name()))
+    }
+
+    async fn get_unit(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, GetUnitRequest>,
+    ) -> ServiceResult<UnitFile> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let file_name = format!("{}.container", full.service.name);
+        let content = self
+            .state
+            .agent
+            .read_unit(&loaded.user, &file_name)
+            .await
+            .map_err(internal)?
+            .unwrap_or_default();
+        let deployment_id = self
+            .state
+            .store
+            .latest_deployment(full.service.id)
+            .await
+            .map_err(internal)?
+            .map(|d| d.id.to_string())
+            .unwrap_or_default();
+        Response::ok(UnitFile {
+            path: format!("{}/.config/containers/systemd/{file_name}", loaded.ws.home),
+            content,
+            deployment_id,
+            ..Default::default()
+        })
+    }
+
+    async fn logs(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, LogsRequest>,
+    ) -> ServiceResult<ServiceStream<LogLine>> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let unit = format!("{}.service", full.service.name);
+        let tail = if req.tail == 0 { 200 } else { req.tail };
+        let lines = self
+            .state
+            .agent
+            .read_journal(&loaded.user, &unit, tail)
+            .await
+            .map_err(internal)?;
+        let out: Vec<LogLine> = lines
+            .into_iter()
+            .map(|l| LogLine {
+                time: buffa_types::Timestamp {
+                    seconds: (l.realtime_usec / 1_000_000) as i64,
+                    nanos: ((l.realtime_usec % 1_000_000) * 1000) as i32,
+                    ..Default::default()
+                }
+                .into(),
+                unit: unit.clone(),
+                message: l.message,
+                priority: l.priority as u32,
+                ..Default::default()
+            })
+            .collect();
+        // `follow` is accepted but not yet live; the stream ends after the tail.
+        Response::stream_ok(futures::stream::iter(out.into_iter().map(Ok)))
+    }
+
+    async fn stats(
+        &self,
+        _ctx: RequestContext,
+        _req: ServiceRequest<'_, StatsRequest>,
+    ) -> ServiceResult<ServiceStream<StatsSample>> {
+        Err(ConnectError::new(
+            ErrorCode::Unimplemented,
+            "stats arrive with the podman socket client",
+        ))
+    }
+
+    async fn plan_upsert(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, PlanUpsertServiceRequest>,
+    ) -> ServiceResult<Plan> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        let owned: PlanUpsertServiceRequest = req.to_owned_message();
+        let Some(svc) = owned.service.into_option() else {
+            return Err(invalid("service is required"));
+        };
+        let project_name = if req.project.is_empty() {
+            "default".to_string()
+        } else {
+            req.project.to_string()
+        };
+        if !maurice_core::validate::is_dns_label(&project_name) {
+            return Err(invalid("project must be a DNS label"));
+        }
+        // An existing service with this name keeps its id so the upsert replaces it.
+        let existing = loaded.services.iter().find(|s| s.service.name == svc.name);
+        let service_id = existing.map(|s| s.service.id).unwrap_or_else(Uuid::now_v7);
+        let project_id = match existing {
+            Some(s) => s.project.id,
+            None => loaded
+                .projects
+                .iter()
+                .find(|p| p.name == project_name)
+                .map(|p| p.id)
+                .unwrap_or_else(Uuid::now_v7),
+        };
+        let secret_ids = |n: &str| loaded.secret_ids.get(n).copied();
+        let (mut row, ports, env) =
+            model_map::service_from_proto(&svc, service_id, project_id, &secret_ids)
+                .map_err(|e| invalid(e.to_string()))?;
+        if let Some(e) = existing {
+            row.created_at = e.service.created_at;
+            row.health_cmd = e.service.health_cmd.clone();
+        }
+        if row.health_cmd.is_none() {
+            row.health_cmd = default_health_cmd(row.image_ref.as_deref());
+        }
+
+        // Validate the workspace as it would be after the change.
+        let mut core = loaded.core();
+        let new_full = maurice_db::ServiceFull {
+            service: row.clone(),
+            project: maurice_db::ProjectRow {
+                id: project_id,
+                workspace_id: wid,
+                name: project_name.clone(),
+                git_repo: None,
+                git_key_secret_id: None,
+            },
+            ports: ports.clone(),
+            env: env.clone(),
+        };
+        let core_svc = model_map::service_to_core(&new_full, &loaded.secret_name());
+        for p in &mut core.projects {
+            p.services.retain(|s| s.name != core_svc.name);
+        }
+        match core.projects.iter_mut().find(|p| p.name == project_name) {
+            Some(p) => p.services.push(core_svc.clone()),
+            None => core.projects.push(maurice_core::Project {
+                name: project_name.clone(),
+                git_repo: None,
+                services: vec![core_svc.clone()],
+            }),
+        }
+        let findings: Vec<StoredFinding> = maurice_core::validate_workspace(&core)
+            .iter()
+            .map(StoredFinding::from)
+            .collect();
+
+        // Render and diff against disk.
+        let image = image_of(&core_svc, &core.name);
+        let units = render_units(&core, &core_svc, &image, "dev")?;
+        let mut changes = Vec::new();
+        for u in &units {
+            let on_disk = self
+                .state
+                .agent
+                .read_unit(&loaded.user, &u.file_name)
+                .await
+                .map_err(internal)?;
+            let diff = unit_diff(on_disk.as_deref(), &u.content);
+            if !diff.is_empty() {
+                changes.push(StoredChange {
+                    kind: "write_unit".into(),
+                    target: format!("{}/{}", loaded.ws.unix_user, u.file_name),
+                    diff,
+                    destructive: false,
+                });
+            }
+        }
+        let unit = format!("{}.service", row.name);
+        let running = existing.is_some()
+            && self
+                .state
+                .agent
+                .unit_status(&loaded.user, &unit)
+                .await
+                .map(|s| s.active_state == "active")
+                .unwrap_or(false);
+        if running && !changes.is_empty() {
+            changes.push(StoredChange {
+                kind: "restart_unit".into(),
+                target: unit.clone(),
+                diff: String::new(),
+                destructive: false,
+            });
+        }
+        if changes.is_empty() {
+            changes.push(StoredChange {
+                kind: "write_unit".into(),
+                target: format!("{} (definition only, units unchanged)", row.name),
+                diff: String::new(),
+                destructive: false,
+            });
+        }
+        let payload = PlanPayload::UpsertService {
+            workspace_id: wid,
+            project_id,
+            project_name,
+            service: row,
+            ports,
+            env,
+            units,
+            running_unit: running.then_some(unit),
+        };
+        Response::ok(store_plan(&self.state, wid, payload, changes, findings).await?)
+    }
+
+    async fn plan_deploy(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, PlanDeployRequest>,
+    ) -> ServiceResult<Plan> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let core = loaded.core();
+        let core_svc = core
+            .services()
+            .find(|s| s.name == full.service.name)
+            .ok_or_else(|| internal("service missing from model"))?;
+        let mut findings: Vec<StoredFinding> = maurice_core::validate_workspace(&core)
+            .iter()
+            .map(StoredFinding::from)
+            .collect();
+        if matches!(core_svc.source, maurice_core::Source::Build { .. }) {
+            findings.push(StoredFinding {
+                severity: "error".into(),
+                code: "deploy.build_not_wired".into(),
+                message: "image builds are not implemented yet; use an image".into(),
+                target: format!("service:{}", core_svc.name),
+            });
+        }
+        let unit = format!("{}.service", full.service.name);
+        let running = self
+            .state
+            .agent
+            .unit_status(&loaded.user, &unit)
+            .await
+            .map(|s| s.active_state == "active")
+            .unwrap_or(false);
+        let image = image_of(core_svc, &core.name);
+        let changes = vec![StoredChange {
+            kind: if running {
+                "restart_unit"
+            } else {
+                "start_unit"
+            }
+            .into(),
+            target: format!("{unit} ← {image}"),
+            diff: String::new(),
+            destructive: false,
+        }];
+        let payload = PlanPayload::DeployService {
+            workspace_id: loaded.ws.id,
+            service_id: full.service.id,
+            unit,
+            image,
+        };
+        Response::ok(store_plan(&self.state, loaded.ws.id, payload, changes, findings).await?)
+    }
+
+    async fn plan_env_change(
+        &self,
+        _ctx: RequestContext,
+        _req: ServiceRequest<'_, PlanEnvChangeRequest>,
+    ) -> ServiceResult<Plan> {
+        Err(ConnectError::new(
+            ErrorCode::Unimplemented,
+            "use PlanUpsert with the full definition for now",
+        ))
+    }
+
+    async fn plan_publish_port(
+        &self,
+        _ctx: RequestContext,
+        _req: ServiceRequest<'_, PlanPublishPortRequest>,
+    ) -> ServiceResult<Plan> {
+        Err(ConnectError::new(
+            ErrorCode::Unimplemented,
+            "use PlanUpsert with the full definition for now",
+        ))
+    }
+
+    async fn plan_delete(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, PlanDeleteServiceRequest>,
+    ) -> ServiceResult<Plan> {
+        let (full, loaded) = self.service_and_workspace(req.id).await?;
+        let core = loaded.core();
+        let core_svc = core
+            .services()
+            .find(|s| s.name == full.service.name)
+            .ok_or_else(|| internal("service missing from model"))?;
+        let unit = format!("{}.service", full.service.name);
+        let mut unit_files = vec![format!("{}.container", full.service.name)];
+        let mut changes = vec![
+            StoredChange {
+                kind: "stop_unit".into(),
+                target: unit.clone(),
+                diff: String::new(),
+                destructive: false,
+            },
+            StoredChange {
+                kind: "remove_unit".into(),
+                target: format!("{}/{}.container", loaded.ws.unix_user, full.service.name),
+                diff: String::new(),
+                destructive: true,
+            },
+        ];
+        if req.purge_volumes {
+            for v in maurice_quadlet::render_volumes(core_svc) {
+                changes.push(StoredChange {
+                    kind: "remove_unit".into(),
+                    target: format!(
+                        "{}/{} (volume data stays on disk)",
+                        loaded.ws.unix_user, v.file_name
+                    ),
+                    diff: String::new(),
+                    destructive: true,
+                });
+                unit_files.push(v.file_name);
+            }
+        }
+        let payload = PlanPayload::DeleteService {
+            workspace_id: loaded.ws.id,
+            service_id: full.service.id,
+            unit,
+            unit_files,
+            purge_volumes: req.purge_volumes,
+        };
+        Response::ok(store_plan(&self.state, loaded.ws.id, payload, changes, vec![]).await?)
+    }
+
+    async fn restart(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, RestartRequest>,
+    ) -> ServiceResult<Empty> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .agent
+            .restart_unit(&loaded.user, &format!("{}.service", full.service.name))
+            .await
+            .map_err(internal)?;
+        Response::ok(Empty::default())
+    }
+
+    async fn stop(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, StopRequest>,
+    ) -> ServiceResult<Empty> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .agent
+            .stop_unit(&loaded.user, &format!("{}.service", full.service.name))
+            .await
+            .map_err(internal)?;
+        Response::ok(Empty::default())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets
+// ---------------------------------------------------------------------------
+
+pub struct SecretsSvc {
+    pub state: Arc<State>,
+}
+
+fn secret_to_proto(s: &maurice_db::SecretRow) -> SecretInfo {
+    SecretInfo {
+        id: s.id.to_string(),
+        workspace_id: s.workspace_id.to_string(),
+        name: s.name.clone(),
+        version: s.version as u32,
+        created_at: buffa_types::Timestamp {
+            seconds: s.created_at.unix_timestamp(),
+            nanos: 0,
+            ..Default::default()
+        }
+        .into(),
+        ..Default::default()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl Secrets for SecretsSvc {
+    async fn list(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, ListSecretsRequest>,
+    ) -> ServiceResult<ListSecretsResponse> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let rows = self.state.store.list_secrets(wid).await.map_err(internal)?;
+        Response::ok(ListSecretsResponse {
+            secrets: rows.iter().map(secret_to_proto).collect(),
+            ..Default::default()
+        })
+    }
+
+    async fn set(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, SetSecretRequest>,
+    ) -> ServiceResult<SecretInfo> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        maurice_agent::host::validate_secret_name(req.name).map_err(|e| invalid(e.to_string()))?;
+        if req.value.is_empty() {
+            return Err(invalid("secret value must not be empty"));
+        }
+        let sealed = self.state.master_key.seal(req.value).map_err(internal)?;
+        // Push to the host first: if podman refuses, nothing is recorded.
+        self.state
+            .agent
+            .set_secret(&loaded.user, req.name, req.value)
+            .await
+            .map_err(internal)?;
+        let row = self
+            .state
+            .store
+            .insert_secret_version(wid, req.name, &sealed)
+            .await
+            .map_err(internal)?;
+        Response::ok(secret_to_proto(&row))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plans
+// ---------------------------------------------------------------------------
+
 pub struct PlansSvc {
     pub state: Arc<State>,
 }
@@ -348,6 +1077,237 @@ fn event(i: usize, status: apply_event::Status, detail: impl Into<String>) -> Ap
         detail: detail.into(),
         ..Default::default()
     }
+}
+
+async fn execute(
+    state: &State,
+    plan_id: Uuid,
+    payload: PlanPayload,
+    events: &mut Vec<ApplyEvent>,
+) -> anyhow::Result<()> {
+    use apply_event::Status::{STATUS_DONE as DONE, STATUS_STARTED as STARTED};
+    match payload {
+        PlanPayload::CreateWorkspace {
+            name,
+            env,
+            unix_user,
+            home,
+            subuid_start,
+            subuid_len,
+        } => {
+            events.push(event(0, STARTED, format!("creating {unix_user}")));
+            let user = state
+                .agent
+                .create_user(&NewUser {
+                    name: unix_user.clone(),
+                    home: home.clone(),
+                    subuid_start: subuid_start as u32,
+                    subuid_len: subuid_len as u32,
+                })
+                .await?;
+            let wrow = WorkspaceRow {
+                id: Uuid::now_v7(),
+                name,
+                unix_user,
+                uid: user.uid as i32,
+                subuid_start,
+                subuid_len,
+                home,
+                env,
+                cpu_slice: None,
+                created_at: OffsetDateTime::now_utc(),
+            };
+            state.store.insert_workspace(&wrow).await?;
+            events.push(event(
+                0,
+                DONE,
+                format!("workspace {} uid {}", wrow.id, user.uid),
+            ));
+        }
+        PlanPayload::DeleteWorkspace {
+            workspace_id,
+            unix_user,
+            uid,
+            purge,
+        } => {
+            events.push(event(0, STARTED, format!("deleting {unix_user}")));
+            // Idempotent: a retry after a partial failure must still clean the database.
+            match state
+                .agent
+                .delete_user(
+                    &UserRef {
+                        name: unix_user.clone(),
+                        uid: uid as u32,
+                    },
+                    purge,
+                )
+                .await
+            {
+                Ok(()) => {}
+                Err(maurice_agent::AgentError::NoSuchUser(_)) => {
+                    events.push(event(
+                        0,
+                        STARTED,
+                        format!("{unix_user} already absent on the host"),
+                    ));
+                }
+                Err(e) => return Err(e.into()),
+            }
+            state.store.delete_workspace(workspace_id).await?;
+            events.push(event(0, DONE, format!("{unix_user} removed")));
+        }
+        PlanPayload::UpsertService {
+            workspace_id,
+            project_id,
+            project_name,
+            service,
+            ports,
+            env,
+            units,
+            running_unit,
+        } => {
+            let ws = state
+                .store
+                .get_workspace(workspace_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("workspace vanished"))?;
+            let user = UserRef {
+                name: ws.unix_user.clone(),
+                uid: ws.uid as u32,
+            };
+            let project = match state
+                .store
+                .list_projects(workspace_id)
+                .await?
+                .into_iter()
+                .find(|p| p.id == project_id)
+            {
+                Some(p) => p,
+                None => {
+                    state
+                        .store
+                        .ensure_project(workspace_id, &project_name)
+                        .await?
+                }
+            };
+            let mut service = service;
+            service.project_id = project.id;
+            events.push(event(0, STARTED, format!("saving {}", service.name)));
+            state.store.upsert_service(&service, &ports, &env).await?;
+            // The network unit is shared by the workspace; writing it is idempotent.
+            let net = maurice_quadlet::render_network(&core_workspace_shell(&ws));
+            state
+                .agent
+                .write_unit(&user, &net.file_name, &net.content)
+                .await?;
+            for (i, u) in units.iter().enumerate() {
+                events.push(event(i + 1, STARTED, format!("writing {}", u.file_name)));
+                state
+                    .agent
+                    .write_unit(&user, &u.file_name, &u.content)
+                    .await?;
+                events.push(event(i + 1, DONE, u.file_name.clone()));
+            }
+            state.agent.daemon_reload(&user).await?;
+            if let Some(unit) = running_unit {
+                let i = units.len() + 1;
+                events.push(event(i, STARTED, format!("restarting {unit}")));
+                state.agent.restart_unit(&user, &unit).await?;
+                events.push(event(i, DONE, format!("{unit} restarted")));
+            }
+            events.push(event(0, DONE, format!("service {} saved", service.id)));
+        }
+        PlanPayload::DeployService {
+            workspace_id,
+            service_id,
+            unit,
+            image,
+        } => {
+            let ws = state
+                .store
+                .get_workspace(workspace_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("workspace vanished"))?;
+            let user = UserRef {
+                name: ws.unix_user.clone(),
+                uid: ws.uid as u32,
+            };
+            let dep_id = Uuid::now_v7();
+            let started = OffsetDateTime::now_utc();
+            events.push(event(
+                0,
+                STARTED,
+                format!("starting {unit} (waits for healthy)"),
+            ));
+            let before = state.agent.unit_status(&user, &unit).await?;
+            let result = if before.active_state == "active" {
+                state.agent.restart_unit(&user, &unit).await
+            } else {
+                state.agent.start_unit(&user, &unit).await
+            };
+            let after = state.agent.unit_status(&user, &unit).await?;
+            let ok = result.is_ok() && after.active_state == "active";
+            state
+                .store
+                .insert_deployment(&DeploymentRow {
+                    id: dep_id,
+                    service_id,
+                    plan_id,
+                    image_digest: image.clone(),
+                    git_sha: None,
+                    status: if ok { "healthy" } else { "failed" }.into(),
+                    started_at: started,
+                    finished_at: Some(OffsetDateTime::now_utc()),
+                })
+                .await?;
+            result?;
+            anyhow::ensure!(
+                ok,
+                "{unit} is {} ({}) after start",
+                after.active_state,
+                after.sub_state
+            );
+            events.push(event(
+                0,
+                DONE,
+                format!(
+                    "deployment {dep_id}: {unit} {} ({})",
+                    after.active_state, after.sub_state
+                ),
+            ));
+        }
+        PlanPayload::DeleteService {
+            workspace_id,
+            service_id,
+            unit,
+            unit_files,
+            purge_volumes: _,
+        } => {
+            let ws = state
+                .store
+                .get_workspace(workspace_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("workspace vanished"))?;
+            let user = UserRef {
+                name: ws.unix_user.clone(),
+                uid: ws.uid as u32,
+            };
+            events.push(event(0, STARTED, format!("stopping {unit}")));
+            let _ = state.agent.stop_unit(&user, &unit).await;
+            events.push(event(0, DONE, format!("{unit} stopped")));
+            for (i, f) in unit_files.iter().enumerate() {
+                events.push(event(i + 1, STARTED, format!("removing {f}")));
+                match state.agent.remove_unit(&user, f).await {
+                    Ok(()) | Err(maurice_agent::AgentError::NoSuchUnit(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
+                events.push(event(i + 1, DONE, f.clone()));
+            }
+            state.agent.daemon_reload(&user).await?;
+            state.store.delete_service(service_id).await?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(refining_impl_trait)]
@@ -411,83 +1371,7 @@ impl Plans for PlansSvc {
         // Alpha executes synchronously and streams the recorded events; a live
         // channel replaces this once applies take more than a few seconds.
         let mut events = Vec::new();
-        let state = self.state.clone();
-        let outcome: anyhow::Result<()> = async {
-            match stored.payload {
-                PlanPayload::CreateWorkspace {
-                    name,
-                    env,
-                    unix_user,
-                    home,
-                    subuid_start,
-                    subuid_len,
-                } => {
-                    events.push(event(
-                        0,
-                        apply_event::Status::STATUS_STARTED,
-                        format!("creating {unix_user}"),
-                    ));
-                    let user = state
-                        .agent
-                        .create_user(&NewUser {
-                            name: unix_user.clone(),
-                            home: home.clone(),
-                            subuid_start: subuid_start as u32,
-                            subuid_len: subuid_len as u32,
-                        })
-                        .await?;
-                    let wrow = WorkspaceRow {
-                        id: Uuid::now_v7(),
-                        name,
-                        unix_user,
-                        uid: user.uid as i32,
-                        subuid_start,
-                        subuid_len,
-                        home,
-                        env,
-                        cpu_slice: None,
-                        created_at: OffsetDateTime::now_utc(),
-                    };
-                    state.store.insert_workspace(&wrow).await?;
-                    events.push(event(
-                        0,
-                        apply_event::Status::STATUS_DONE,
-                        format!("workspace {} uid {}", wrow.id, user.uid),
-                    ));
-                }
-                PlanPayload::DeleteWorkspace {
-                    workspace_id,
-                    unix_user,
-                    uid,
-                    purge,
-                } => {
-                    events.push(event(
-                        0,
-                        apply_event::Status::STATUS_STARTED,
-                        format!("deleting {unix_user}"),
-                    ));
-                    state
-                        .agent
-                        .delete_user(
-                            &UserRef {
-                                name: unix_user.clone(),
-                                uid: uid as u32,
-                            },
-                            purge,
-                        )
-                        .await?;
-                    state.store.delete_workspace(workspace_id).await?;
-                    events.push(event(
-                        0,
-                        apply_event::Status::STATUS_DONE,
-                        format!("{unix_user} removed"),
-                    ));
-                }
-            }
-            Ok(())
-        }
-        .await;
-        match outcome {
+        match execute(&self.state, row.id, stored.payload, &mut events).await {
             Ok(()) => {
                 self.state
                     .store

@@ -108,6 +108,13 @@ message PlanDeleteServiceRequest {
   string id = 1;
   bool purge_volumes = 2;
 }
+message PlanUpsertServiceRequest {
+  string workspace_id = 1;
+  // Project is created on first use.
+  string project = 2;
+  // Full desired definition; `id` and `project_id` are ignored.
+  Service service = 3;
+}
 message RestartRequest {
   string service_id = 1;
 }
@@ -122,7 +129,9 @@ service Services {
   rpc GetUnit(GetUnitRequest) returns (UnitFile);
   rpc Logs(LogsRequest) returns (stream LogLine);
   rpc Stats(StatsRequest) returns (stream StatsSample);
-  // scope: plan
+  // scope: plan. Create or replace a service definition; apply writes the units.
+  rpc PlanUpsert(PlanUpsertServiceRequest) returns (Plan);
+  // scope: plan. Start (or restart) the service from its current units.
   rpc PlanDeploy(PlanDeployRequest) returns (Plan);
   rpc PlanEnvChange(PlanEnvChangeRequest) returns (Plan);
   rpc PlanPublishPort(PlanPublishPortRequest) returns (Plan);

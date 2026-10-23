@@ -1,0 +1,7 @@
+{
+  "name": "postgres",
+  "kind": "SERVICE_KIND_STATEFUL",
+  "imageRef": "docker.io/library/postgres:16",
+  "ports": [{ "containerPort": 5432 }],
+  "env": [{ "key": "POSTGRES_PASSWORD", "secretName": "pg_admin" }]
+}

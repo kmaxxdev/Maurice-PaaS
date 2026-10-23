@@ -5,6 +5,8 @@ pub mod proto {
     connectrpc::include_generated!();
 }
 
+pub mod crypto;
+pub mod model_map;
 pub mod services;
 
 use std::sync::Arc;
@@ -13,6 +15,12 @@ use std::sync::Arc;
 pub fn router(state: Arc<services::State>) -> connectrpc::Router {
     connectrpc::Router::new()
         .add_service(Arc::new(services::WorkspacesSvc {
+            state: state.clone(),
+        }))
+        .add_service(Arc::new(services::ServicesSvc {
+            state: state.clone(),
+        }))
+        .add_service(Arc::new(services::SecretsSvc {
             state: state.clone(),
         }))
         .add_service(Arc::new(services::PlansSvc { state }))
