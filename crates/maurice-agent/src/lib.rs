@@ -2,13 +2,16 @@
 //! this trait and nothing else: no "run a command", no shell. Every method is
 //! one of the operations listed in ADR-002, and every call is logged.
 //!
-//! Alpha ships [`DryRunAgent`], which records what it would do. The root
-//! implementation (systemd over D-Bus, Podman over its Unix socket, user
-//! management) lands behind the same trait.
+//! [`DryRunAgent`] records what it would do; [`HostAgent`] does it, as root,
+//! through fixed system tools.
+
+pub mod host;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+
+pub use host::HostAgent;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -69,6 +72,9 @@ pub trait Agent: Send + Sync {
     async fn stop_unit(&self, user: &UserRef, unit: &str) -> Result<()>;
     async fn restart_unit(&self, user: &UserRef, unit: &str) -> Result<()>;
     async fn unit_status(&self, user: &UserRef, unit: &str) -> Result<UnitStatus>;
+
+    // --- podman secrets of that user; the value is passed on stdin, never on argv ---
+    async fn set_secret(&self, user: &UserRef, name: &str, value: &[u8]) -> Result<()>;
 }
 
 /// One recorded call, for tests, dry runs and the audit log.
@@ -102,6 +108,11 @@ pub enum Op {
     RestartUnit {
         user: String,
         unit: String,
+    },
+    /// The value is deliberately not recorded.
+    SetSecret {
+        user: String,
+        name: String,
     },
 }
 
@@ -199,5 +210,12 @@ impl Agent for DryRunAgent {
             sub_state: "dead".into(),
             since_unix: None,
         })
+    }
+    async fn set_secret(&self, user: &UserRef, name: &str, _value: &[u8]) -> Result<()> {
+        self.record(Op::SetSecret {
+            user: user.name.clone(),
+            name: name.into(),
+        });
+        Ok(())
     }
 }

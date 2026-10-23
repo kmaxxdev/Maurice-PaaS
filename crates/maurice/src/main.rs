@@ -3,6 +3,7 @@
 //! confirmation on destructive actions, `maurice-odysseus-stella` for forced,
 //! scripted recovery behind an extra guard.
 
+mod host;
 mod tier;
 
 use clap::{Parser, Subcommand};
@@ -35,6 +36,11 @@ enum Command {
     },
     /// Print the safety tier this invocation runs with.
     Tier,
+    /// Operate on this host as root: users, units, systemd. The agent's surface as commands.
+    Host {
+        #[command(subcommand)]
+        command: host::HostCommand,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +89,9 @@ async fn main() -> anyhow::Result<()> {
                 })?;
                 println!("# ==> {}\n{}", unit.file_name, unit.content);
             }
+        }
+        Command::Host { command } => {
+            host::run(command, tier).await?;
         }
         Command::Serve { listen } => {
             tier.require_at_least(Tier::Maurice)?;

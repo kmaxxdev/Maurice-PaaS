@@ -1261,6 +1261,7 @@ dependencies = [
  "async-trait",
  "serde",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
