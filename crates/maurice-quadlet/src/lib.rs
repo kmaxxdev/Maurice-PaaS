@@ -31,6 +31,9 @@ pub struct RenderInput<'a> {
     pub version: &'a str,
     /// Resolver for `{{service.field}}` references. Returns `None` when unknown.
     pub resolve_ref: &'a dyn Fn(&str) -> Option<String>,
+    /// Start at boot. False until the service has been deployed once, so a defined
+    /// but never started service does not come up after a reboot.
+    pub enabled: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -182,8 +185,10 @@ pub fn render_container(input: &RenderInput<'_>) -> Result<Unit, RenderError> {
     }
     out.push('\n');
 
-    let _ = writeln!(out, "[Install]");
-    let _ = writeln!(out, "WantedBy=default.target");
+    if input.enabled {
+        let _ = writeln!(out, "[Install]");
+        let _ = writeln!(out, "WantedBy=default.target");
+    }
 
     Ok(Unit {
         file_name: format!("{}.container", svc.name),
@@ -339,6 +344,7 @@ mod tests {
             image: "registry.local/shop/web@sha256:abc",
             version: "a1b2c3",
             resolve_ref: &resolver,
+            enabled: true,
         })
         .unwrap();
         let c = &u.content;
@@ -369,6 +375,23 @@ mod tests {
         assert!(c.contains("MemoryMax=536870912"));
         assert!(c.contains("Slice=maurice-prod.slice"));
         assert!(c.contains("LogDriver=journald"));
+        assert!(c.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn undeployed_service_has_no_install_section() {
+        let ws = fixture();
+        let web = &ws.projects[0].services[0];
+        let u = render_container(&RenderInput {
+            workspace: &ws,
+            service: web,
+            image: "img",
+            version: "v1",
+            resolve_ref: &resolver,
+            enabled: false,
+        })
+        .unwrap();
+        assert!(!u.content.contains("[Install]"));
     }
 
     #[test]
@@ -381,6 +404,7 @@ mod tests {
             image: "docker.io/library/postgres@sha256:def",
             version: "16-4",
             resolve_ref: &resolver,
+            enabled: true,
         })
         .unwrap();
         assert!(
@@ -403,6 +427,7 @@ mod tests {
             image: "x",
             version: "v",
             resolve_ref: &|_| None,
+            enabled: true,
         })
         .unwrap_err();
         assert_eq!(
@@ -425,6 +450,7 @@ mod tests {
                 image: "img",
                 version: "v1",
                 resolve_ref: &resolver,
+                enabled: true,
             })
             .unwrap()
         };

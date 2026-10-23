@@ -622,24 +622,20 @@ impl Agent for HostAgent {
         user: &UserRef,
         unit: &str,
         tail: u32,
+        since_unix: Option<u64>,
     ) -> Result<Vec<JournalLine>> {
         validate_unit_name(unit)?;
         let uid = user.uid.to_string();
         let n = tail.clamp(1, 5000).to_string();
-        let out = self
-            .run(
-                "journalctl",
-                &[
-                    "--no-pager",
-                    "-o",
-                    "json",
-                    "-n",
-                    &n,
-                    &format!("_UID={uid}"),
-                    &format!("_SYSTEMD_USER_UNIT={unit}"),
-                ],
-            )
-            .await?;
+        let since = since_unix.map(|t| format!("@{t}"));
+        let uid_f = format!("_UID={uid}");
+        let unit_f = format!("_SYSTEMD_USER_UNIT={unit}");
+        let mut args = vec!["--no-pager", "-o", "json", "-n", &n, &uid_f, &unit_f];
+        if let Some(s) = &since {
+            args.push("--since");
+            args.push(s);
+        }
+        let out = self.run("journalctl", &&args).await?;
         let mut lines = Vec::new();
         for raw in out.lines() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {

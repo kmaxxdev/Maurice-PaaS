@@ -189,6 +189,7 @@ async fn apply_workspace(
             image: &image,
             version: "dev",
             resolve_ref: &|r| resolve_ref(ws, r),
+            enabled: true,
         })?;
         agent
             .write_unit(user, &unit.file_name, &unit.content)
@@ -392,6 +393,7 @@ async fn prepare_host() -> anyhow::Result<()> {
     }
     install_panel_postgres().await?;
     ensure_master_key()?;
+    configure_journald().await?;
     println!("host prepared");
     Ok(())
 }
@@ -533,5 +535,27 @@ fn ensure_master_key() -> anyhow::Result<()> {
     let key = maurice_api::crypto::MasterKey::generate_hex();
     std::fs::write(env_path, format!("{text}MAURICE_MASTER_KEY={key}\n"))?;
     println!("secrets: master key written to {env_path}");
+    Ok(())
+}
+
+/// Bound the journal so chatty containers cannot fill the disk, and rate-limit
+/// per service. Applies to the system journal, where user units also land.
+async fn configure_journald() -> anyhow::Result<()> {
+    let conf = "# Installed by `maurice host prepare`.\n\
+[Journal]\n\
+SystemMaxUse=4G\n\
+SystemKeepFree=10%\n\
+SystemMaxFileSize=256M\n\
+MaxRetentionSec=1month\n\
+RateLimitIntervalSec=30s\n\
+RateLimitBurst=20000\n\
+Compress=yes\n";
+    std::fs::create_dir_all("/etc/systemd/journald.conf.d")?;
+    if write_if_different("/etc/systemd/journald.conf.d/50-maurice.conf", conf)? {
+        run_root("systemctl", &["restart", "systemd-journald"]).await?;
+        println!("journald: limits applied (4G max, 1 month retention, rate limit per service)");
+    } else {
+        println!("journald: limits already in place");
+    }
     Ok(())
 }

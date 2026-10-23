@@ -247,6 +247,14 @@ pub struct DeploymentRow {
     pub finished_at: Option<OffsetDateTime>,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct PublishedPort {
+    pub host_ip: Option<String>,
+    pub host_port: Option<i32>,
+    pub workspace: String,
+    pub service: String,
+}
+
 /// A service with its ports and env, as the API and the renderer want it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceFull {
@@ -455,6 +463,17 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Every published host binding on the host with the workspace and service that owns it.
+    pub async fn list_published_ports(&self) -> anyhow::Result<Vec<PublishedPort>> {
+        Ok(sqlx::query_as::<_, PublishedPort>(
+            "select p.host_ip, p.host_port, w.name as workspace, s.name as service
+             from ports p join services s on s.id = p.service_id join projects pr on pr.id = s.project_id
+             join workspaces w on w.id = pr.workspace_id where p.published",
+        )
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn delete_service(&self, id: Uuid) -> anyhow::Result<bool> {
