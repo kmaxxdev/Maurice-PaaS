@@ -129,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
                     image: &image,
                     version: "dev",
                     resolve_ref: &|r| Some(format!("<{r}>")),
+                    enabled: true,
                 })?;
                 println!("# ==> {}\n{}", unit.file_name, unit.content);
             }

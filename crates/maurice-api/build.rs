@@ -1,4 +1,7 @@
 fn main() {
+    // rust-embed needs the UI output folder to exist even when the UI was never built.
+    let dist = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/web/dist");
+    std::fs::create_dir_all(dist).expect("create packages/web/dist");
     let proto_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../proto");
     let files = [
         "common",

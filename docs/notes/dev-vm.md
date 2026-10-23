@@ -80,3 +80,13 @@ clones (shallow, fresh every time) and runs `podman build` as the workspace user
 image and version, starts it. Measured ~14 s for the hello image; a second deploy rebuilds and restarts.
 Private repositories: store the deploy key as a workspace secret and pass `--key-secret`; the agent
 writes it to `~/.config/maurice/keys/<service>` with mode 0600 and uses it via `GIT_SSH_COMMAND`.
+
+## Reboot and hardening, 2026-10-23
+
+Rebooted the VM with a deployed postgres in one workspace: `user@<uid>.service` of every workspace
+came back through linger and the deployed service returned on its own; the panel's PostgreSQL unit
+too. A service that was defined but never deployed also started, which is wrong: units now get
+`[Install] WantedBy=default.target` only on their first deploy. `host prepare` additionally writes
+journald limits (4 GB, one month, per-service rate limit). Published host ports are checked across
+all workspaces when planning an upsert, and service logs are read only since the workspace was
+created, so a reused system uid does not leak a previous workspace's journal.

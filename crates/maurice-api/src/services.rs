@@ -378,6 +378,7 @@ fn render_units(
     svc: &maurice_core::Service,
     image: &str,
     version: &str,
+    enabled: bool,
 ) -> Result<Vec<UnitText>, ConnectError> {
     let mut units = Vec::new();
     for v in maurice_quadlet::render_volumes(svc) {
@@ -392,6 +393,7 @@ fn render_units(
         image,
         version,
         resolve_ref: &|r| resolve_ref(ws, r),
+        enabled,
     })
     .map_err(|e| invalid(e.to_string()))?;
     units.push(UnitText {
@@ -728,7 +730,12 @@ impl Services for ServicesSvc {
         let lines = self
             .state
             .agent
-            .read_journal(&loaded.user, &unit, tail)
+            .read_journal(
+                &loaded.user,
+                &unit,
+                tail,
+                Some(loaded.ws.created_at.unix_timestamp() as u64),
+            )
             .await
             .map_err(internal)?;
         let out: Vec<LogLine> = lines
@@ -836,9 +843,62 @@ impl Services for ServicesSvc {
             .map(StoredFinding::from)
             .collect();
 
+        // Host ports are global: refuse bindings already published by another service anywhere.
+        let mut findings = findings;
+        for pr in self
+            .state
+            .store
+            .list_published_ports()
+            .await
+            .map_err(internal)?
+        {
+            if pr.workspace == loaded.ws.name && pr.service == row.name {
+                continue;
+            }
+            for mine in ports.iter().filter(|p| p.published) {
+                if mine.host_ip == pr.host_ip && mine.host_port == pr.host_port {
+                    let bind = format!(
+                        "{}:{}",
+                        pr.host_ip.clone().unwrap_or_default(),
+                        pr.host_port.unwrap_or(0)
+                    );
+                    findings.push(StoredFinding {
+                        severity: "error".into(),
+                        code: "port.conflict".into(),
+                        message: format!(
+                            "{bind} is already published by {}/{}",
+                            pr.workspace, pr.service
+                        ),
+                        target: format!("port:{bind}"),
+                    });
+                }
+            }
+        }
+
         // Render and diff against disk.
         let image = image_of(&core_svc, &core.name);
-        let units = render_units(&core, &core_svc, &image, "dev")?;
+        let deployed = match existing {
+            Some(e) => {
+                let unit = format!("{}.service", e.service.name);
+                let active = self
+                    .state
+                    .agent
+                    .unit_status(&loaded.user, &unit)
+                    .await
+                    .map(|s| s.active_state == "active")
+                    .unwrap_or(false);
+                active
+                    || self
+                        .state
+                        .store
+                        .latest_deployment(e.service.id)
+                        .await
+                        .map_err(internal)?
+                        .is_some()
+            }
+            None => false,
+        };
+        let units = render_units(&core, &core_svc, &image, "dev", deployed)?;
         let mut changes = Vec::new();
         for u in &units {
             let on_disk = self
@@ -1469,7 +1529,10 @@ async fn execute(
                 image = result.image_ref.clone();
                 git_sha = Some(result.git_sha.clone());
                 idx += 1;
-                // Re-render the container unit with the built image and version.
+            }
+            // Re-render the container unit with the image to run and mark it enabled, so it
+            // comes back after a reboot. Units of never-deployed services carry no [Install].
+            {
                 let projects = state.store.list_projects(workspace_id).await?;
                 let services = state.store.list_services(workspace_id).await?;
                 let secrets = state.store.list_secrets(workspace_id).await?;
@@ -1477,11 +1540,16 @@ async fn execute(
                     secrets.iter().map(|s| (s.id, s.name.clone())).collect();
                 let name_of = |id: Uuid| names.get(&id).cloned();
                 let core = model_map::workspace_to_core(&ws, &projects, &services, &name_of);
+                let svc_name = unit.trim_end_matches(".service");
                 let svc = core
                     .services()
-                    .find(|s| s.name == b.service_name)
+                    .find(|s| s.name == svc_name)
                     .ok_or_else(|| anyhow::anyhow!("service vanished"))?;
-                let units = render_units(&core, svc, &image, &short)
+                let version = git_sha
+                    .as_deref()
+                    .map(|s| s.get(..12).unwrap_or(s).to_string())
+                    .unwrap_or_else(|| "dev".into());
+                let units = render_units(&core, svc, &image, &version, true)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 for u in &units {
                     events.push(event(idx, STARTED, format!("writing {}", u.file_name)));

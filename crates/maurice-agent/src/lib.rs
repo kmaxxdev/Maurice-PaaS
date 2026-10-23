@@ -77,8 +77,15 @@ pub trait Agent: Send + Sync {
     async fn set_secret(&self, user: &UserRef, name: &str, value: &[u8]) -> Result<()>;
 
     // --- journal of one unit of that user, newest last ---
-    async fn read_journal(&self, user: &UserRef, unit: &str, tail: u32)
-    -> Result<Vec<JournalLine>>;
+    /// `since_unix` drops lines older than that moment; system uids get reused, so a new
+    /// workspace must not see the journal of a previous owner of its uid.
+    async fn read_journal(
+        &self,
+        user: &UserRef,
+        unit: &str,
+        tail: u32,
+        since_unix: Option<u64>,
+    ) -> Result<Vec<JournalLine>>;
 
     // --- clone a repository and build an image, both as the workspace user ---
     async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult>;
@@ -272,6 +279,7 @@ impl Agent for DryRunAgent {
         _user: &UserRef,
         _unit: &str,
         _tail: u32,
+        _since_unix: Option<u64>,
     ) -> Result<Vec<JournalLine>> {
         Ok(vec![])
     }
