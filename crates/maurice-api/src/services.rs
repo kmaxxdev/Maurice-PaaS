@@ -66,12 +66,13 @@ pub enum PlanPayload {
         /// Unit of this service to restart if it is already running.
         running_unit: Option<String>,
     },
-    /// Start or restart from the current units.
+    /// Start or restart from the current units; for build sources, clone and build first.
     DeployService {
         workspace_id: Uuid,
         service_id: Uuid,
         unit: String,
         image: String,
+        build: Option<StoredBuild>,
     },
     DeleteService {
         workspace_id: Uuid,
@@ -80,6 +81,19 @@ pub enum PlanPayload {
         unit_files: Vec<String>,
         purge_volumes: bool,
     },
+}
+
+/// Build inputs stored in the plan; the deploy key is looked up at apply time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBuild {
+    pub repo: String,
+    pub git_ref: String,
+    pub key_secret_name: Option<String>,
+    pub dockerfile: String,
+    pub context: String,
+    /// Image name without tag.
+    pub image: String,
+    pub service_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +200,7 @@ fn change_kind(kind: &str) -> planned_change::Kind {
         "publish_port" => planned_change::Kind::KIND_PUBLISH_PORT,
         "unpublish_port" => planned_change::Kind::KIND_UNPUBLISH_PORT,
         "set_secret" => planned_change::Kind::KIND_SET_SECRET,
+        "build_image" => planned_change::Kind::KIND_BUILD_IMAGE,
         _ => planned_change::Kind::KIND_UNSPECIFIED,
     }
 }
@@ -798,6 +813,7 @@ impl Services for ServicesSvc {
                 workspace_id: wid,
                 name: project_name.clone(),
                 git_repo: None,
+                git_ref: "main".into(),
                 git_key_secret_id: None,
             },
             ports: ports.clone(),
@@ -894,14 +910,6 @@ impl Services for ServicesSvc {
             .iter()
             .map(StoredFinding::from)
             .collect();
-        if matches!(core_svc.source, maurice_core::Source::Build { .. }) {
-            findings.push(StoredFinding {
-                severity: "error".into(),
-                code: "deploy.build_not_wired".into(),
-                message: "image builds are not implemented yet; use an image".into(),
-                target: format!("service:{}", core_svc.name),
-            });
-        }
         let unit = format!("{}.service", full.service.name);
         let running = self
             .state
@@ -910,8 +918,60 @@ impl Services for ServicesSvc {
             .await
             .map(|s| s.active_state == "active")
             .unwrap_or(false);
-        let image = image_of(core_svc, &core.name);
-        let changes = vec![StoredChange {
+        let mut changes = Vec::new();
+        let mut build = None;
+        let image = match &core_svc.source {
+            maurice_core::Source::Image { reference } => reference.clone(),
+            maurice_core::Source::Build {
+                dockerfile,
+                context,
+            } => {
+                let image = format!("localhost/{}/{}", core.name, core_svc.name);
+                match full.project.git_repo.as_deref().filter(|r| !r.is_empty()) {
+                    None => findings.push(StoredFinding {
+                        severity: "error".into(),
+                        code: "deploy.no_repository".into(),
+                        message: format!(
+                            "project '{}' has no git repository; set one with `marik project set`",
+                            full.project.name
+                        ),
+                        target: format!("project:{}", full.project.name),
+                    }),
+                    Some(repo) => {
+                        let key_secret_name = full
+                            .project
+                            .git_key_secret_id
+                            .map(|id| loaded.secret_names.get(&id).cloned().unwrap_or_default());
+                        changes.push(StoredChange {
+                            kind: "build_image".into(),
+                            target: format!("{repo}@{} → {image}:<sha>", full.project.git_ref),
+                            diff: String::new(),
+                            destructive: false,
+                        });
+                        changes.push(StoredChange {
+                            kind: "write_unit".into(),
+                            target: format!(
+                                "{}/{}.container (Image= and version)",
+                                loaded.ws.unix_user, core_svc.name
+                            ),
+                            diff: String::new(),
+                            destructive: false,
+                        });
+                        build = Some(StoredBuild {
+                            repo: repo.to_string(),
+                            git_ref: full.project.git_ref.clone(),
+                            key_secret_name,
+                            dockerfile: dockerfile.clone(),
+                            context: context.clone(),
+                            image: image.clone(),
+                            service_name: core_svc.name.clone(),
+                        });
+                    }
+                }
+                image
+            }
+        };
+        changes.push(StoredChange {
             kind: if running {
                 "restart_unit"
             } else {
@@ -921,12 +981,13 @@ impl Services for ServicesSvc {
             target: format!("{unit} ← {image}"),
             diff: String::new(),
             destructive: false,
-        }];
+        });
         let payload = PlanPayload::DeployService {
             workspace_id: loaded.ws.id,
             service_id: full.service.id,
             unit,
             image,
+            build,
         };
         Response::ok(store_plan(&self.state, loaded.ws.id, payload, changes, findings).await?)
     }
@@ -1030,6 +1091,93 @@ impl Services for ServicesSvc {
             .await
             .map_err(internal)?;
         Response::ok(Empty::default())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+pub struct ProjectsSvc {
+    pub state: Arc<State>,
+}
+
+fn project_to_proto(
+    p: &maurice_db::ProjectRow,
+    secret_name: &dyn Fn(Uuid) -> Option<String>,
+) -> Project {
+    Project {
+        id: p.id.to_string(),
+        workspace_id: p.workspace_id.to_string(),
+        name: p.name.clone(),
+        git_repo: p.git_repo.clone().unwrap_or_default(),
+        git_ref: p.git_ref.clone(),
+        git_key_secret: p
+            .git_key_secret_id
+            .and_then(secret_name)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl Projects for ProjectsSvc {
+    async fn list(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, ListProjectsRequest>,
+    ) -> ServiceResult<ListProjectsResponse> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        let name = loaded.secret_name();
+        Response::ok(ListProjectsResponse {
+            projects: loaded
+                .projects
+                .iter()
+                .map(|p| project_to_proto(p, &name))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    async fn upsert(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, UpsertProjectRequest>,
+    ) -> ServiceResult<Project> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        if !maurice_core::validate::is_dns_label(req.name) {
+            return Err(invalid("project name must be a DNS label"));
+        }
+        let git_repo = (!req.git_repo.is_empty()).then(|| req.git_repo.to_string());
+        if let Some(r) = &git_repo
+            && (r.starts_with('-') || r.chars().any(char::is_whitespace))
+        {
+            return Err(invalid("git repository url is not valid"));
+        }
+        let git_ref = if req.git_ref.is_empty() {
+            "main"
+        } else {
+            req.git_ref
+        };
+        let key_id = if req.git_key_secret.is_empty() {
+            None
+        } else {
+            Some(*loaded.secret_ids.get(req.git_key_secret).ok_or_else(|| {
+                invalid(format!(
+                    "secret '{}' does not exist in this workspace",
+                    req.git_key_secret
+                ))
+            })?)
+        };
+        let row = self
+            .state
+            .store
+            .upsert_project(wid, req.name, git_repo.as_deref(), git_ref, key_id)
+            .await
+            .map_err(internal)?;
+        Response::ok(project_to_proto(&row, &loaded.secret_name()))
     }
 }
 
@@ -1260,6 +1408,7 @@ async fn execute(
             service_id,
             unit,
             image,
+            build,
         } => {
             let ws = state
                 .store
@@ -1270,10 +1419,85 @@ async fn execute(
                 name: ws.unix_user.clone(),
                 uid: ws.uid as u32,
             };
+            let mut image = image;
+            let mut git_sha = None;
+            let mut idx = 0;
+            if let Some(b) = build {
+                events.push(event(
+                    idx,
+                    STARTED,
+                    format!("cloning {}@{} and building {}", b.repo, b.git_ref, b.image),
+                ));
+                let ssh_key = match &b.key_secret_name {
+                    Some(name) if !name.is_empty() => {
+                        let row = state
+                            .store
+                            .latest_secret(workspace_id, name)
+                            .await?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("deploy key secret '{name}' not found")
+                            })?;
+                        Some(state.master_key.open(&row.encrypted_value)?)
+                    }
+                    _ => None,
+                };
+                let result = state
+                    .agent
+                    .build_image(
+                        &user,
+                        &maurice_agent::BuildSpec {
+                            repo: b.repo.clone(),
+                            git_ref: b.git_ref.clone(),
+                            ssh_key,
+                            dockerfile: b.dockerfile.clone(),
+                            context: b.context.clone(),
+                            image: b.image.clone(),
+                            checkout: b.service_name.clone(),
+                        },
+                    )
+                    .await?;
+                let short = result
+                    .git_sha
+                    .get(..12)
+                    .unwrap_or(&result.git_sha)
+                    .to_string();
+                events.push(event(
+                    idx,
+                    DONE,
+                    format!("built {} from {short}", result.image_ref),
+                ));
+                image = result.image_ref.clone();
+                git_sha = Some(result.git_sha.clone());
+                idx += 1;
+                // Re-render the container unit with the built image and version.
+                let projects = state.store.list_projects(workspace_id).await?;
+                let services = state.store.list_services(workspace_id).await?;
+                let secrets = state.store.list_secrets(workspace_id).await?;
+                let names: HashMap<Uuid, String> =
+                    secrets.iter().map(|s| (s.id, s.name.clone())).collect();
+                let name_of = |id: Uuid| names.get(&id).cloned();
+                let core = model_map::workspace_to_core(&ws, &projects, &services, &name_of);
+                let svc = core
+                    .services()
+                    .find(|s| s.name == b.service_name)
+                    .ok_or_else(|| anyhow::anyhow!("service vanished"))?;
+                let units = render_units(&core, svc, &image, &short)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                for u in &units {
+                    events.push(event(idx, STARTED, format!("writing {}", u.file_name)));
+                    state
+                        .agent
+                        .write_unit(&user, &u.file_name, &u.content)
+                        .await?;
+                    events.push(event(idx, DONE, u.file_name.clone()));
+                }
+                state.agent.daemon_reload(&user).await?;
+                idx += 1;
+            }
             let dep_id = Uuid::now_v7();
             let started = OffsetDateTime::now_utc();
             events.push(event(
-                0,
+                idx,
                 STARTED,
                 format!("starting {unit} (waits for healthy)"),
             ));
@@ -1292,7 +1516,7 @@ async fn execute(
                     service_id,
                     plan_id,
                     image_digest: image.clone(),
-                    git_sha: None,
+                    git_sha,
                     status: if ok { "healthy" } else { "failed" }.into(),
                     started_at: started,
                     finished_at: Some(OffsetDateTime::now_utc()),
@@ -1306,7 +1530,7 @@ async fn execute(
                 after.sub_state
             );
             events.push(event(
-                0,
+                idx,
                 DONE,
                 format!(
                     "deployment {dep_id}: {unit} {} ({})",

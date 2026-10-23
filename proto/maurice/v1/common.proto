@@ -61,6 +61,7 @@ message PlannedChange {
     KIND_PUBLISH_PORT = 8;
     KIND_UNPUBLISH_PORT = 9;
     KIND_SET_SECRET = 10;
+    KIND_BUILD_IMAGE = 11;
   }
   Kind kind = 1;
   // Human-readable target, e.g. "ws-shop/web.container".

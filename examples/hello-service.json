@@ -1,0 +1,6 @@
+{
+  "name": "hello",
+  "kind": "SERVICE_KIND_STATELESS",
+  "dockerfilePath": "examples/hello-app/Dockerfile",
+  "ports": [{ "containerPort": 80, "published": true, "hostIp": "127.0.0.1", "hostPort": 18081 }]
+}

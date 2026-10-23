@@ -40,7 +40,13 @@ pub fn service_from_proto(
             ("image", Some(r.clone()), None, None)
         }
         Some(oneof::service::Source::DockerfilePath(p)) if !p.is_empty() => {
-            ("build", None, Some(p.clone()), Some(".".to_string()))
+            // The build context is the Dockerfile's directory inside the repository.
+            let context = std::path::Path::new(p)
+                .parent()
+                .map(|d| d.to_string_lossy().into_owned())
+                .filter(|d| !d.is_empty())
+                .unwrap_or_else(|| ".".into());
+            ("build", None, Some(p.clone()), Some(context))
         }
         _ => return Err(invalid("source must be image_ref or dockerfile_path")),
     };

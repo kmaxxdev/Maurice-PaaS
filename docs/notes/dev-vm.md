@@ -70,3 +70,13 @@ blocks until healthy (~40 s) → `service logs` reads the user journal → a sec
 `{{postgres.url}}` and publishes `127.0.0.1:18080`, `curl` answers 200 → re-upsert without changes
 plans nothing → `marik` refuses the destructive delete, `maurice --confirm` applies it → deleting the
 workspace with a running service and secret-backed env leaves no user, subuid, home or container.
+
+## Builds, 2026-10-23
+
+`marik project set <ws> default --repo https://github.com/kmaxxdev/Maurice-PaaS.git --ref main`, then a
+service with `dockerfilePath: examples/hello-app/Dockerfile`. The deploy plan shows the build step; apply
+clones (shallow, fresh every time) and runs `podman build` as the workspace user through
+`systemd-run -M`, tags the image `localhost/<ws>/<svc>:<sha12>`, rewrites the container unit with that
+image and version, starts it. Measured ~14 s for the hello image; a second deploy rebuilds and restarts.
+Private repositories: store the deploy key as a workspace secret and pass `--key-secret`; the agent
+writes it to `~/.config/maurice/keys/<service>` with mode 0600 and uses it via `GIT_SSH_COMMAND`.

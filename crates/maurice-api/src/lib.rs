@@ -24,6 +24,9 @@ pub fn router(state: Arc<services::State>) -> connectrpc::Router {
         .add_service(Arc::new(services::SecretsSvc {
             state: state.clone(),
         }))
+        .add_service(Arc::new(services::ProjectsSvc {
+            state: state.clone(),
+        }))
         .add_service(Arc::new(services::PlansSvc { state }))
 }
 
