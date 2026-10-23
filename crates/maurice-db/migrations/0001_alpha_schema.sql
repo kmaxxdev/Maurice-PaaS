@@ -39,8 +39,9 @@ create table services (
     check ((source_kind = 'image' and image_ref is not null) or (source_kind = 'build' and dockerfile is not null))
 );
 
--- The alias must be unique inside a workspace network, not just inside a project.
-create unique index services_alias_per_workspace on services (name, (select workspace_id from projects p where p.id = project_id));
+-- Alias uniqueness across a whole workspace (not just a project) is enforced by the validator;
+-- Postgres cannot express it as a plain unique index across the join.
+create unique index services_name_per_project on services (project_id, name);
 
 create table ports (
     id              uuid primary key,
@@ -81,7 +82,9 @@ alter table projects add constraint projects_git_key_fk foreign key (git_key_sec
 
 create table plans (
     id            uuid primary key,
-    workspace_id  uuid not null references workspaces(id) on delete cascade,
+    -- Not a foreign key: a plan that creates a workspace exists before the workspace does
+    -- (workspace_id is the nil uuid until apply), and plans outlive deleted workspaces as history.
+    workspace_id  uuid not null,
     changes       jsonb not null,
     findings      jsonb not null,
     destructive   boolean not null default false,

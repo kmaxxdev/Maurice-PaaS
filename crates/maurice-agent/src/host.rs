@@ -147,7 +147,8 @@ impl HostAgent {
         )))
     }
 
-    async fn passwd_entry(&self, name: &str) -> Result<Option<(u32, PathBuf)>> {
+    /// `(uid, gid, home)` from the passwd database, or `None` if the user does not exist.
+    async fn passwd_entry(&self, name: &str) -> Result<Option<(u32, u32, PathBuf)>> {
         let out = Command::new("getent")
             .args(["passwd", name])
             .output()
@@ -166,13 +167,17 @@ impl HostAgent {
         let uid = fields[2]
             .parse()
             .map_err(|_| AgentError::Host("bad uid in passwd".into()))?;
-        Ok(Some((uid, PathBuf::from(fields[5]))))
+        let gid = fields[3]
+            .parse()
+            .map_err(|_| AgentError::Host("bad gid in passwd".into()))?;
+        Ok(Some((uid, gid, PathBuf::from(fields[5]))))
     }
 
-    async fn home_of(&self, user: &UserRef) -> Result<PathBuf> {
+    /// `(gid, home)` of a verified workspace user.
+    async fn home_of(&self, user: &UserRef) -> Result<(u32, PathBuf)> {
         match self.passwd_entry(&user.name).await? {
-            Some((uid, home)) if uid == user.uid => Ok(home),
-            Some((uid, _)) => Err(AgentError::Refused(format!(
+            Some((uid, gid, home)) if uid == user.uid => Ok((gid, home)),
+            Some((uid, _, _)) => Err(AgentError::Refused(format!(
                 "user {} has uid {uid}, expected {}",
                 user.name, user.uid
             ))),
@@ -180,8 +185,10 @@ impl HostAgent {
         }
     }
 
-    async fn quadlet_dir(&self, user: &UserRef) -> Result<PathBuf> {
-        Ok(self.home_of(user).await?.join(QUADLET_DIR))
+    /// `(gid, quadlet dir)` of a verified workspace user.
+    async fn quadlet_dir(&self, user: &UserRef) -> Result<(u32, PathBuf)> {
+        let (gid, home) = self.home_of(user).await?;
+        Ok((gid, home.join(QUADLET_DIR)))
     }
 }
 
@@ -300,7 +307,7 @@ impl Agent for HostAgent {
         .await?;
         self.run("loginctl", &["enable-linger", &user.name]).await?;
 
-        let (uid, home) = self
+        let (uid, gid, home) = self
             .passwd_entry(&user.name)
             .await?
             .ok_or_else(|| AgentError::Host("user vanished after useradd".into()))?;
@@ -311,7 +318,7 @@ impl Agent for HostAgent {
         tokio::fs::create_dir_all(&quadlet)
             .await
             .map_err(|e| AgentError::Host(e.to_string()))?;
-        chown_recursive(&home.join(".config"), uid).await?;
+        chown_recursive(&home.join(".config"), uid, gid).await?;
         // Home must not be world-readable: it holds unit files and volume data.
         self.run("chmod", &["0750", &home.to_string_lossy()])
             .await?;
@@ -325,7 +332,7 @@ impl Agent for HostAgent {
 
     async fn delete_user(&self, user: &UserRef, purge_home: bool) -> Result<()> {
         validate_user_name(&user.name)?;
-        self.home_of(user).await?;
+        let _ = self.home_of(user).await?;
         // Stop everything the user manager runs, then the manager itself.
         let _ = self.user_systemctl(user, &["stop", "default.target"]).await;
         let _ = self.run("loginctl", &["disable-linger", &user.name]).await;
@@ -365,7 +372,7 @@ impl Agent for HostAgent {
 
     async fn write_unit(&self, user: &UserRef, file_name: &str, content: &str) -> Result<()> {
         validate_unit_file_name(file_name)?;
-        let dir = self.quadlet_dir(user).await?;
+        let (gid, dir) = self.quadlet_dir(user).await?;
         tokio::fs::create_dir_all(&dir)
             .await
             .map_err(|e| AgentError::Host(e.to_string()))?;
@@ -374,7 +381,7 @@ impl Agent for HostAgent {
         tokio::fs::write(&tmp, content)
             .await
             .map_err(|e| AgentError::Host(e.to_string()))?;
-        std::os::unix::fs::chown(&tmp, Some(user.uid), Some(user.uid))
+        std::os::unix::fs::chown(&tmp, Some(user.uid), Some(gid))
             .map_err(|e| AgentError::Host(e.to_string()))?;
         tokio::fs::rename(&tmp, &path)
             .await
@@ -385,7 +392,7 @@ impl Agent for HostAgent {
 
     async fn remove_unit(&self, user: &UserRef, file_name: &str) -> Result<()> {
         validate_unit_file_name(file_name)?;
-        let path = self.quadlet_dir(user).await?.join(file_name);
+        let path = self.quadlet_dir(user).await?.1.join(file_name);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -397,7 +404,7 @@ impl Agent for HostAgent {
 
     async fn read_unit(&self, user: &UserRef, file_name: &str) -> Result<Option<String>> {
         validate_unit_file_name(file_name)?;
-        let path = self.quadlet_dir(user).await?.join(file_name);
+        let path = self.quadlet_dir(user).await?.1.join(file_name);
         match tokio::fs::read_to_string(&path).await {
             Ok(s) => Ok(Some(s)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -472,10 +479,10 @@ impl Agent for HostAgent {
     }
 }
 
-async fn chown_recursive(root: &Path, uid: u32) -> Result<()> {
+async fn chown_recursive(root: &Path, uid: u32, gid: u32) -> Result<()> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(p) = stack.pop() {
-        std::os::unix::fs::chown(&p, Some(uid), Some(uid))
+        std::os::unix::fs::chown(&p, Some(uid), Some(gid))
             .map_err(|e| AgentError::Host(e.to_string()))?;
         if p.is_dir() {
             let mut rd = tokio::fs::read_dir(&p)

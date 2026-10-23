@@ -16,7 +16,11 @@ maurice-api = { workspace = true }
 maurice-agent = { workspace = true }
 maurice-core = { workspace = true }
 maurice-quadlet = { workspace = true }
+maurice-db = { workspace = true }
+connectrpc = { workspace = true }
+http = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

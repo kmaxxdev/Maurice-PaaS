@@ -9,6 +9,10 @@ license.workspace = true
 [dependencies]
 maurice-core = { workspace = true }
 maurice-agent = { workspace = true }
+maurice-db = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+anyhow = { workspace = true }
 connectrpc = { workspace = true }
 buffa = { workspace = true }
 buffa-types = { workspace = true }

@@ -390,6 +390,133 @@ async fn prepare_host() -> anyhow::Result<()> {
     } else {
         println!("apparmor: no pasta profile on this host, nothing to do");
     }
+    install_panel_postgres().await?;
     println!("host prepared");
     Ok(())
+}
+
+/// The panel's own PostgreSQL: a rootful Quadlet unit at system level, data in a
+/// named volume, published on loopback only. The password lives in a root
+/// podman secret and in /etc/maurice/maurice.env (mode 0600) for the panel.
+/// This is the first piece of the "starter set" from ADR-004.
+async fn install_panel_postgres() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let env_path = std::path::Path::new("/etc/maurice/maurice.env");
+    std::fs::create_dir_all("/etc/maurice")?;
+    let password = match std::fs::read_to_string(env_path) {
+        Ok(text) => text
+            .lines()
+            .find_map(|l| l.strip_prefix("MAURICE_PG_PASSWORD="))
+            .map(|v| v.trim_matches('"').to_string()),
+        Err(_) => None,
+    };
+    let password = match password {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            let p = random_token(32);
+            let content = format!(
+                "# Written by `maurice host prepare`. Read by `maurice serve`.\nMAURICE_PG_PASSWORD={p}\nDATABASE_URL=postgres://maurice:{p}@127.0.0.1:5432/maurice\n"
+            );
+            std::fs::write(env_path, content)?;
+            std::fs::set_permissions(env_path, std::fs::Permissions::from_mode(0o600))?;
+            p
+        }
+    };
+    // Root podman secret for the unit. Replace to keep it in sync with the env file.
+    let _ = tokio::process::Command::new("podman")
+        .args(["secret", "rm", "maurice_pg_password"])
+        .output()
+        .await;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut child = tokio::process::Command::new("podman")
+            .args(["secret", "create", "maurice_pg_password", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(password.as_bytes())
+            .await?;
+        anyhow::ensure!(child.wait().await?.success(), "podman secret create failed");
+    }
+    let unit = "# Installed by `maurice host prepare`. The panel's own database.\n\
+[Unit]\n\
+Description=Maurice panel PostgreSQL\n\
+\n\
+[Container]\n\
+ContainerName=maurice-postgres\n\
+Image=docker.io/library/postgres:16\n\
+PublishPort=127.0.0.1:5432:5432\n\
+Environment=POSTGRES_USER=maurice\n\
+Environment=POSTGRES_DB=maurice\n\
+Secret=maurice_pg_password,type=env,target=POSTGRES_PASSWORD\n\
+Volume=maurice-postgres-data.volume:/var/lib/postgresql/data:Z\n\
+HealthCmd=pg_isready -U maurice -d maurice\n\
+HealthInterval=10s\n\
+HealthStartPeriod=20s\n\
+HealthOnFailure=kill\n\
+Notify=healthy\n\
+LogDriver=journald\n\
+\n\
+[Service]\n\
+Restart=on-failure\n\
+TimeoutStopSec=60\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n";
+    let volume = "[Volume]\nVolumeName=maurice-postgres-data\n";
+    std::fs::create_dir_all("/etc/containers/systemd")?;
+    let changed = write_if_different("/etc/containers/systemd/maurice-postgres.container", unit)?
+        | write_if_different(
+            "/etc/containers/systemd/maurice-postgres-data.volume",
+            volume,
+        )?;
+    if changed {
+        run_root("systemctl", &["daemon-reload"]).await?;
+    }
+    println!("postgres: starting maurice-postgres.service (waits for healthy)");
+    run_root("systemctl", &["start", "maurice-postgres.service"]).await?;
+    println!("postgres: ready on 127.0.0.1:5432, credentials in /etc/maurice/maurice.env");
+    Ok(())
+}
+
+fn write_if_different(path: &str, content: &str) -> anyhow::Result<bool> {
+    if std::fs::read_to_string(path)
+        .map(|c| c == content)
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    std::fs::write(path, content)?;
+    Ok(true)
+}
+
+async fn run_root(program: &str, args: &[&str]) -> anyhow::Result<()> {
+    let out = tokio::process::Command::new(program)
+        .args(args)
+        .output()
+        .await?;
+    anyhow::ensure!(
+        out.status.success(),
+        "{program} {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
+}
+
+/// URL-safe random token from the kernel's entropy; no extra crate needed.
+fn random_token(len: usize) -> String {
+    use std::io::Read;
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut buf = vec![0u8; len];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .expect("urandom");
+    buf.iter()
+        .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
+        .collect()
 }
