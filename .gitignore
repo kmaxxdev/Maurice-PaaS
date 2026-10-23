@@ -22,4 +22,5 @@ graphify-out/
 
 # Node
 node_modules/
-packages/*/dist/
+packages/*/dist/*
+!packages/web/dist/.gitkeep

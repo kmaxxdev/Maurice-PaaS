@@ -6,6 +6,6 @@
     "dev": "pnpm --filter @maurice/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "proto": "buf generate --template proto/buf.gen.ts.yaml proto"
+    "proto": "cd proto && buf generate --template buf.gen.ts.yaml"
   }
 }

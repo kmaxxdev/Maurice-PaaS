@@ -27,6 +27,14 @@ pnpm proto                         # regenerate packages/web/src/gen from proto/
 pnpm typecheck
 ```
 
+## Web UI
+
+`pnpm build` writes `packages/web/dist`, which the binary embeds (also in debug builds). After a
+UI change: `pnpm build && cargo build`, then restart `maurice serve`; the panel is at the listen
+address, Connect RPCs under `/maurice.v1.*`. Routes: `/`, `/ws/:id`, `/ws/:wsId/svc/:id`.
+Reach the VM panel from the host with `ssh -L 7700:127.0.0.1:7700 dev@<vm>` and open
+http://127.0.0.1:7700/.
+
 ## Run
 
 The panel needs PostgreSQL. On a prepared host (`sudo maurice host prepare` installs it as a

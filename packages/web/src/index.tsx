@@ -1,6 +1,20 @@
 /* @refresh reload */
 import { render } from "solid-js/web";
-import { App } from "./App";
+import { Router, Route } from "@solidjs/router";
 import "@maurice/ui/tokens.css";
+import "./styles.css";
+import { Layout } from "./components/Layout";
+import { Home } from "./pages/Home";
+import { Workspace } from "./pages/Workspace";
+import { ServiceView } from "./pages/Service";
 
-render(() => <App />, document.getElementById("root")!);
+render(
+  () => (
+    <Router root={Layout}>
+      <Route path="/" component={Home} />
+      <Route path="/ws/:id" component={Workspace} />
+      <Route path="/ws/:wsId/svc/:id" component={ServiceView} />
+    </Router>
+  ),
+  document.getElementById("root")!,
+);

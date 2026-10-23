@@ -39,6 +39,8 @@ time = { version = "0.3", features = ["serde"] }
 async-trait = "0.1"
 chacha20poly1305 = "0.11"
 hex = "0.4"
+rust-embed = { version = "8", features = ["axum", "debug-embed"] }
+mime_guess = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

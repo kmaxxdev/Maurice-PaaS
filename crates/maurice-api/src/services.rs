@@ -607,6 +607,44 @@ impl ServicesSvc {
 
 #[allow(refining_impl_trait)]
 impl Services for ServicesSvc {
+    async fn get_status(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, GetStatusRequest>,
+    ) -> ServiceResult<ServiceStatus> {
+        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let unit = format!("{}.service", full.service.name);
+        let st = self
+            .state
+            .agent
+            .unit_status(&loaded.user, &unit)
+            .await
+            .map_err(internal)?;
+        let dep = self
+            .state
+            .store
+            .latest_deployment(full.service.id)
+            .await
+            .map_err(internal)?;
+        Response::ok(ServiceStatus {
+            service_id: full.service.id.to_string(),
+            active_state: st.active_state,
+            sub_state: st.sub_state,
+            since: match st.since_unix {
+                Some(t) => buffa_types::Timestamp {
+                    seconds: t as i64,
+                    nanos: 0,
+                    ..Default::default()
+                }
+                .into(),
+                None => buffa::MessageField::none(),
+            },
+            deployment_id: dep.as_ref().map(|d| d.id.to_string()).unwrap_or_default(),
+            image: dep.map(|d| d.image_digest).unwrap_or_default(),
+            ..Default::default()
+        })
+    }
+
     async fn list(
         &self,
         _ctx: RequestContext,

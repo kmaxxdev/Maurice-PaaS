@@ -8,6 +8,7 @@ pub mod proto {
 pub mod crypto;
 pub mod model_map;
 pub mod services;
+mod ui;
 
 use std::sync::Arc;
 
@@ -26,10 +27,18 @@ pub fn router(state: Arc<services::State>) -> connectrpc::Router {
         .add_service(Arc::new(services::PlansSvc { state }))
 }
 
-/// Full axum application: Connect RPCs plus a plain health route.
+/// Full axum application: Connect RPCs, a plain health route and the embedded SPA.
+///
+/// Connect methods live under `/maurice.v1.<Service>/<Method>`; everything else
+/// is answered by the SPA (its assets, or `index.html` for client-side routes).
 pub fn app(state: Arc<services::State>) -> axum::Router {
+    let connect = router(state).into_axum_service();
     axum::Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .fallback_service(router(state).into_axum_service())
+        .route(
+            "/maurice.v1.{service}/{method}",
+            axum::routing::any_service(connect),
+        )
+        .fallback(ui::serve)
         .layer(tower_http::trace::TraceLayer::new_for_http())
 }
