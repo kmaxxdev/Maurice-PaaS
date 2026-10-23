@@ -38,3 +38,12 @@ VM `maurice-dev-ubuntu`: Ubuntu 26.04.1, Podman 5.7.0, crun 1.21, AppArmor on. A
 - `systemctl --user start postgres.service` blocks ~45 s on the first pull and returns only once the health check passes (`Notify=healthy`). The container shows `(healthy)`, a sibling container resolves `postgres` through the workspace network, nothing listens on the host (`ss -ltn` has no 5432), the journal carries the container log, `stop` leaves no container behind.
 
 Two generator bugs surfaced only here and were fixed: `DNS=` in a `.network` unit takes resolver IPs (DNS is on by default), and Quadlet already derives `Requires`/`After` from `Network=`.
+
+## Agent selftest, 2026-10-23
+
+`scripts/vm-run.sh host selftest` builds the binary, copies it into the VM and runs `maurice host selftest` as root. The run creates `ws-selftest` (system user, subuid range, linger, quadlet dir), stores a podman secret through the user's manager, writes the rendered units, starts postgres and blocks until healthy (~45 s on first pull), restarts and stops it, then deletes the user with purge and checks that no user, home or subuid entry remains. It passes.
+
+Two host facts learned on the way, both now handled by the agent:
+
+- `loginctl enable-linger` starts the user manager asynchronously. The agent starts `user@<uid>.service` explicitly and polls `systemctl --user -M <user>@ is-system-running` before the first call, otherwise `systemd-run -M` fails with "Transport endpoint is not connected".
+- Ubuntu 26.04's AppArmor profile for pasta accepts signals only from unconfined peers, while podman carries the `podman` label. Stopping any rootless container then fails at `podman rm` with `rootless netns: kill network process: permission denied` and systemd marks the unit failed. `maurice host prepare` adds `signal (receive) peer=podman,` through the profile's local override and reloads it. This affects every Podman user on Ubuntu 26.04, not only Maurice.
