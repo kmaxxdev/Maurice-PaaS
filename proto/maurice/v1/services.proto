@@ -68,6 +68,23 @@ message StatsSample {
   uint64 net_tx_bytes = 5;
 }
 
+// Runtime state of a service's unit, read from systemd.
+message ServiceStatus {
+  string service_id = 1;
+  // systemd ActiveState: active, inactive, failed, activating, deactivating
+  string active_state = 2;
+  // systemd SubState: running, dead, exited, ...
+  string sub_state = 3;
+  google.protobuf.Timestamp since = 4;
+  // Latest deployment, if any.
+  string deployment_id = 5;
+  string image = 6;
+}
+
+message GetStatusRequest {
+  string service_id = 1;
+}
+
 message ListServicesRequest {
   string workspace_id = 1;
 }
@@ -127,6 +144,7 @@ service Services {
   rpc List(ListServicesRequest) returns (ListServicesResponse);
   rpc Get(GetServiceRequest) returns (Service);
   rpc GetUnit(GetUnitRequest) returns (UnitFile);
+  rpc GetStatus(GetStatusRequest) returns (ServiceStatus);
   rpc Logs(LogsRequest) returns (stream LogLine);
   rpc Stats(StatsRequest) returns (stream StatsSample);
   // scope: plan. Create or replace a service definition; apply writes the units.

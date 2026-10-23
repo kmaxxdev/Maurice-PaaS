@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file maurice/v1/services.proto.
  */
 export const file_maurice_v1_services: GenFile = /*@__PURE__*/
-  fileDesc("ChltYXVyaWNlL3YxL3NlcnZpY2VzLnByb3RvEgptYXVyaWNlLnYxIlUKBFBvcnQSFgoOY29udGFpbmVyX3BvcnQYASABKA0SEQoJcHVibGlzaGVkGAIgASgIEg8KB2hvc3RfaXAYAyABKAkSEQoJaG9zdF9wb3J0GAQgASgNIlcKBkVudlZhchILCgNrZXkYASABKAkSEQoHbGl0ZXJhbBgCIAEoCUgAEg0KA3JlZhgDIAEoCUgAEhUKC3NlY3JldF9uYW1lGAQgASgJSABCBwoFdmFsdWUiiQIKB1NlcnZpY2USCgoCaWQYASABKAkSEgoKcHJvamVjdF9pZBgCIAEoCRIMCgRuYW1lGAMgASgJEiUKBGtpbmQYBCABKA4yFy5tYXVyaWNlLnYxLlNlcnZpY2VLaW5kEhMKCWltYWdlX3JlZhgFIAEoCUgAEhkKD2RvY2tlcmZpbGVfcGF0aBgGIAEoCUgAEh8KBXBvcnRzGAcgAygLMhAubWF1cmljZS52MS5Qb3J0Eh8KA2VudhgIIAMoCzISLm1hdXJpY2UudjEuRW52VmFyEgsKA2NwdRgJIAEoARIOCgZtZW1vcnkYCiABKAQSEAoIaXNvbGF0ZWQYCyABKAhCCAoGc291cmNlIkAKCFVuaXRGaWxlEgwKBHBhdGgYASABKAkSDwoHY29udGVudBgCIAEoCRIVCg1kZXBsb3ltZW50X2lkGAMgASgJImQKB0xvZ0xpbmUSKAoEdGltZRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEdW5pdBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJEhAKCHByaW9yaXR5GAQgASgNIowBCgtTdGF0c1NhbXBsZRIoCgR0aW1lGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIRCgljcHVfY29yZXMYAiABKAESFAoMbWVtb3J5X2J5dGVzGAMgASgEEhQKDG5ldF9yeF9ieXRlcxgEIAEoBBIUCgxuZXRfdHhfYnl0ZXMYBSABKAQiKwoTTGlzdFNlcnZpY2VzUmVxdWVzdBIUCgx3b3Jrc3BhY2VfaWQYASABKAkiPQoUTGlzdFNlcnZpY2VzUmVzcG9uc2USJQoIc2VydmljZXMYASADKAsyEy5tYXVyaWNlLnYxLlNlcnZpY2UiHwoRR2V0U2VydmljZVJlcXVlc3QSCgoCaWQYASABKAkiJAoOR2V0VW5pdFJlcXVlc3QSEgoKc2VydmljZV9pZBgBIAEoCSI/CgtMb2dzUmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJEg4KBmZvbGxvdxgCIAEoCBIMCgR0YWlsGAMgASgNIiIKDFN0YXRzUmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJIjgKEVBsYW5EZXBsb3lSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkSDwoHdmVyc2lvbhgCIAEoCSJaChRQbGFuRW52Q2hhbmdlUmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJEh8KA3NldBgCIAMoCzISLm1hdXJpY2UudjEuRW52VmFyEg0KBXVuc2V0GAMgAygJImgKFlBsYW5QdWJsaXNoUG9ydFJlcXVlc3QSEgoKc2VydmljZV9pZBgBIAEoCRIWCg5jb250YWluZXJfcG9ydBgCIAEoDRIPCgdob3N0X2lwGAMgASgJEhEKCWhvc3RfcG9ydBgEIAEoDSI9ChhQbGFuRGVsZXRlU2VydmljZVJlcXVlc3QSCgoCaWQYASABKAkSFQoNcHVyZ2Vfdm9sdW1lcxgCIAEoCCIkCg5SZXN0YXJ0UmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJIiEKC1N0b3BSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkyxAUKCFNlcnZpY2VzEkkKBExpc3QSHy5tYXVyaWNlLnYxLkxpc3RTZXJ2aWNlc1JlcXVlc3QaIC5tYXVyaWNlLnYxLkxpc3RTZXJ2aWNlc1Jlc3BvbnNlEjkKA0dldBIdLm1hdXJpY2UudjEuR2V0U2VydmljZVJlcXVlc3QaEy5tYXVyaWNlLnYxLlNlcnZpY2USOwoHR2V0VW5pdBIaLm1hdXJpY2UudjEuR2V0VW5pdFJlcXVlc3QaFC5tYXVyaWNlLnYxLlVuaXRGaWxlEjYKBExvZ3MSFy5tYXVyaWNlLnYxLkxvZ3NSZXF1ZXN0GhMubWF1cmljZS52MS5Mb2dMaW5lMAESPAoFU3RhdHMSGC5tYXVyaWNlLnYxLlN0YXRzUmVxdWVzdBoXLm1hdXJpY2UudjEuU3RhdHNTYW1wbGUwARI9CgpQbGFuRGVwbG95Eh0ubWF1cmljZS52MS5QbGFuRGVwbG95UmVxdWVzdBoQLm1hdXJpY2UudjEuUGxhbhJDCg1QbGFuRW52Q2hhbmdlEiAubWF1cmljZS52MS5QbGFuRW52Q2hhbmdlUmVxdWVzdBoQLm1hdXJpY2UudjEuUGxhbhJHCg9QbGFuUHVibGlzaFBvcnQSIi5tYXVyaWNlLnYxLlBsYW5QdWJsaXNoUG9ydFJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SRAoKUGxhbkRlbGV0ZRIkLm1hdXJpY2UudjEuUGxhbkRlbGV0ZVNlcnZpY2VSZXF1ZXN0GhAubWF1cmljZS52MS5QbGFuEjgKB1Jlc3RhcnQSGi5tYXVyaWNlLnYxLlJlc3RhcnRSZXF1ZXN0GhEubWF1cmljZS52MS5FbXB0eRIyCgRTdG9wEhcubWF1cmljZS52MS5TdG9wUmVxdWVzdBoRLm1hdXJpY2UudjEuRW1wdHliBnByb3RvMw", [file_google_protobuf_timestamp, file_maurice_v1_common]);
+  fileDesc("ChltYXVyaWNlL3YxL3NlcnZpY2VzLnByb3RvEgptYXVyaWNlLnYxIlUKBFBvcnQSFgoOY29udGFpbmVyX3BvcnQYASABKA0SEQoJcHVibGlzaGVkGAIgASgIEg8KB2hvc3RfaXAYAyABKAkSEQoJaG9zdF9wb3J0GAQgASgNIlcKBkVudlZhchILCgNrZXkYASABKAkSEQoHbGl0ZXJhbBgCIAEoCUgAEg0KA3JlZhgDIAEoCUgAEhUKC3NlY3JldF9uYW1lGAQgASgJSABCBwoFdmFsdWUiiQIKB1NlcnZpY2USCgoCaWQYASABKAkSEgoKcHJvamVjdF9pZBgCIAEoCRIMCgRuYW1lGAMgASgJEiUKBGtpbmQYBCABKA4yFy5tYXVyaWNlLnYxLlNlcnZpY2VLaW5kEhMKCWltYWdlX3JlZhgFIAEoCUgAEhkKD2RvY2tlcmZpbGVfcGF0aBgGIAEoCUgAEh8KBXBvcnRzGAcgAygLMhAubWF1cmljZS52MS5Qb3J0Eh8KA2VudhgIIAMoCzISLm1hdXJpY2UudjEuRW52VmFyEgsKA2NwdRgJIAEoARIOCgZtZW1vcnkYCiABKAQSEAoIaXNvbGF0ZWQYCyABKAhCCAoGc291cmNlIkAKCFVuaXRGaWxlEgwKBHBhdGgYASABKAkSDwoHY29udGVudBgCIAEoCRIVCg1kZXBsb3ltZW50X2lkGAMgASgJImQKB0xvZ0xpbmUSKAoEdGltZRgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASDAoEdW5pdBgCIAEoCRIPCgdtZXNzYWdlGAMgASgJEhAKCHByaW9yaXR5GAQgASgNIowBCgtTdGF0c1NhbXBsZRIoCgR0aW1lGAEgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIRCgljcHVfY29yZXMYAiABKAESFAoMbWVtb3J5X2J5dGVzGAMgASgEEhQKDG5ldF9yeF9ieXRlcxgEIAEoBBIUCgxuZXRfdHhfYnl0ZXMYBSABKAQinQEKDVNlcnZpY2VTdGF0dXMSEgoKc2VydmljZV9pZBgBIAEoCRIUCgxhY3RpdmVfc3RhdGUYAiABKAkSEQoJc3ViX3N0YXRlGAMgASgJEikKBXNpbmNlGAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIVCg1kZXBsb3ltZW50X2lkGAUgASgJEg0KBWltYWdlGAYgASgJIiYKEEdldFN0YXR1c1JlcXVlc3QSEgoKc2VydmljZV9pZBgBIAEoCSIrChNMaXN0U2VydmljZXNSZXF1ZXN0EhQKDHdvcmtzcGFjZV9pZBgBIAEoCSI9ChRMaXN0U2VydmljZXNSZXNwb25zZRIlCghzZXJ2aWNlcxgBIAMoCzITLm1hdXJpY2UudjEuU2VydmljZSIfChFHZXRTZXJ2aWNlUmVxdWVzdBIKCgJpZBgBIAEoCSIkCg5HZXRVbml0UmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJIj8KC0xvZ3NSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkSDgoGZm9sbG93GAIgASgIEgwKBHRhaWwYAyABKA0iIgoMU3RhdHNSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkiOAoRUGxhbkRlcGxveVJlcXVlc3QSEgoKc2VydmljZV9pZBgBIAEoCRIPCgd2ZXJzaW9uGAIgASgJIloKFFBsYW5FbnZDaGFuZ2VSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkSHwoDc2V0GAIgAygLMhIubWF1cmljZS52MS5FbnZWYXISDQoFdW5zZXQYAyADKAkiaAoWUGxhblB1Ymxpc2hQb3J0UmVxdWVzdBISCgpzZXJ2aWNlX2lkGAEgASgJEhYKDmNvbnRhaW5lcl9wb3J0GAIgASgNEg8KB2hvc3RfaXAYAyABKAkSEQoJaG9zdF9wb3J0GAQgASgNIj0KGFBsYW5EZWxldGVTZXJ2aWNlUmVxdWVzdBIKCgJpZBgBIAEoCRIVCg1wdXJnZV92b2x1bWVzGAIgASgIImcKGFBsYW5VcHNlcnRTZXJ2aWNlUmVxdWVzdBIUCgx3b3Jrc3BhY2VfaWQYASABKAkSDwoHcHJvamVjdBgCIAEoCRIkCgdzZXJ2aWNlGAMgASgLMhMubWF1cmljZS52MS5TZXJ2aWNlIiQKDlJlc3RhcnRSZXF1ZXN0EhIKCnNlcnZpY2VfaWQYASABKAkiIQoLU3RvcFJlcXVlc3QSEgoKc2VydmljZV9pZBgBIAEoCTLQBgoIU2VydmljZXMSSQoETGlzdBIfLm1hdXJpY2UudjEuTGlzdFNlcnZpY2VzUmVxdWVzdBogLm1hdXJpY2UudjEuTGlzdFNlcnZpY2VzUmVzcG9uc2USOQoDR2V0Eh0ubWF1cmljZS52MS5HZXRTZXJ2aWNlUmVxdWVzdBoTLm1hdXJpY2UudjEuU2VydmljZRI7CgdHZXRVbml0EhoubWF1cmljZS52MS5HZXRVbml0UmVxdWVzdBoULm1hdXJpY2UudjEuVW5pdEZpbGUSRAoJR2V0U3RhdHVzEhwubWF1cmljZS52MS5HZXRTdGF0dXNSZXF1ZXN0GhkubWF1cmljZS52MS5TZXJ2aWNlU3RhdHVzEjYKBExvZ3MSFy5tYXVyaWNlLnYxLkxvZ3NSZXF1ZXN0GhMubWF1cmljZS52MS5Mb2dMaW5lMAESPAoFU3RhdHMSGC5tYXVyaWNlLnYxLlN0YXRzUmVxdWVzdBoXLm1hdXJpY2UudjEuU3RhdHNTYW1wbGUwARJECgpQbGFuVXBzZXJ0EiQubWF1cmljZS52MS5QbGFuVXBzZXJ0U2VydmljZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SPQoKUGxhbkRlcGxveRIdLm1hdXJpY2UudjEuUGxhbkRlcGxveVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SQwoNUGxhbkVudkNoYW5nZRIgLm1hdXJpY2UudjEuUGxhbkVudkNoYW5nZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SRwoPUGxhblB1Ymxpc2hQb3J0EiIubWF1cmljZS52MS5QbGFuUHVibGlzaFBvcnRSZXF1ZXN0GhAubWF1cmljZS52MS5QbGFuEkQKClBsYW5EZWxldGUSJC5tYXVyaWNlLnYxLlBsYW5EZWxldGVTZXJ2aWNlUmVxdWVzdBoQLm1hdXJpY2UudjEuUGxhbhI4CgdSZXN0YXJ0EhoubWF1cmljZS52MS5SZXN0YXJ0UmVxdWVzdBoRLm1hdXJpY2UudjEuRW1wdHkSMgoEU3RvcBIXLm1hdXJpY2UudjEuU3RvcFJlcXVlc3QaES5tYXVyaWNlLnYxLkVtcHR5YgZwcm90bzM", [file_google_protobuf_timestamp, file_maurice_v1_common]);
 
 /**
  * @generated from message maurice.v1.Port
@@ -279,6 +279,73 @@ export const StatsSampleSchema: GenMessage<StatsSample> = /*@__PURE__*/
   messageDesc(file_maurice_v1_services, 5);
 
 /**
+ * Runtime state of a service's unit, read from systemd.
+ *
+ * @generated from message maurice.v1.ServiceStatus
+ */
+export type ServiceStatus = Message<"maurice.v1.ServiceStatus"> & {
+  /**
+   * @generated from field: string service_id = 1;
+   */
+  serviceId: string;
+
+  /**
+   * systemd ActiveState: active, inactive, failed, activating, deactivating
+   *
+   * @generated from field: string active_state = 2;
+   */
+  activeState: string;
+
+  /**
+   * systemd SubState: running, dead, exited, ...
+   *
+   * @generated from field: string sub_state = 3;
+   */
+  subState: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp since = 4;
+   */
+  since?: Timestamp | undefined;
+
+  /**
+   * Latest deployment, if any.
+   *
+   * @generated from field: string deployment_id = 5;
+   */
+  deploymentId: string;
+
+  /**
+   * @generated from field: string image = 6;
+   */
+  image: string;
+};
+
+/**
+ * Describes the message maurice.v1.ServiceStatus.
+ * Use `create(ServiceStatusSchema)` to create a new message.
+ */
+export const ServiceStatusSchema: GenMessage<ServiceStatus> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_services, 6);
+
+/**
+ * @generated from message maurice.v1.GetStatusRequest
+ */
+export type GetStatusRequest = Message<"maurice.v1.GetStatusRequest"> & {
+  /**
+   * @generated from field: string service_id = 1;
+   */
+  serviceId: string;
+};
+
+/**
+ * Describes the message maurice.v1.GetStatusRequest.
+ * Use `create(GetStatusRequestSchema)` to create a new message.
+ */
+export const GetStatusRequestSchema: GenMessage<GetStatusRequest> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_services, 7);
+
+/**
  * @generated from message maurice.v1.ListServicesRequest
  */
 export type ListServicesRequest = Message<"maurice.v1.ListServicesRequest"> & {
@@ -293,7 +360,7 @@ export type ListServicesRequest = Message<"maurice.v1.ListServicesRequest"> & {
  * Use `create(ListServicesRequestSchema)` to create a new message.
  */
 export const ListServicesRequestSchema: GenMessage<ListServicesRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 6);
+  messageDesc(file_maurice_v1_services, 8);
 
 /**
  * @generated from message maurice.v1.ListServicesResponse
@@ -310,7 +377,7 @@ export type ListServicesResponse = Message<"maurice.v1.ListServicesResponse"> & 
  * Use `create(ListServicesResponseSchema)` to create a new message.
  */
 export const ListServicesResponseSchema: GenMessage<ListServicesResponse> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 7);
+  messageDesc(file_maurice_v1_services, 9);
 
 /**
  * @generated from message maurice.v1.GetServiceRequest
@@ -327,7 +394,7 @@ export type GetServiceRequest = Message<"maurice.v1.GetServiceRequest"> & {
  * Use `create(GetServiceRequestSchema)` to create a new message.
  */
 export const GetServiceRequestSchema: GenMessage<GetServiceRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 8);
+  messageDesc(file_maurice_v1_services, 10);
 
 /**
  * @generated from message maurice.v1.GetUnitRequest
@@ -344,7 +411,7 @@ export type GetUnitRequest = Message<"maurice.v1.GetUnitRequest"> & {
  * Use `create(GetUnitRequestSchema)` to create a new message.
  */
 export const GetUnitRequestSchema: GenMessage<GetUnitRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 9);
+  messageDesc(file_maurice_v1_services, 11);
 
 /**
  * @generated from message maurice.v1.LogsRequest
@@ -371,7 +438,7 @@ export type LogsRequest = Message<"maurice.v1.LogsRequest"> & {
  * Use `create(LogsRequestSchema)` to create a new message.
  */
 export const LogsRequestSchema: GenMessage<LogsRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 10);
+  messageDesc(file_maurice_v1_services, 12);
 
 /**
  * @generated from message maurice.v1.StatsRequest
@@ -388,7 +455,7 @@ export type StatsRequest = Message<"maurice.v1.StatsRequest"> & {
  * Use `create(StatsRequestSchema)` to create a new message.
  */
 export const StatsRequestSchema: GenMessage<StatsRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 11);
+  messageDesc(file_maurice_v1_services, 13);
 
 /**
  * @generated from message maurice.v1.PlanDeployRequest
@@ -412,7 +479,7 @@ export type PlanDeployRequest = Message<"maurice.v1.PlanDeployRequest"> & {
  * Use `create(PlanDeployRequestSchema)` to create a new message.
  */
 export const PlanDeployRequestSchema: GenMessage<PlanDeployRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 12);
+  messageDesc(file_maurice_v1_services, 14);
 
 /**
  * @generated from message maurice.v1.PlanEnvChangeRequest
@@ -439,7 +506,7 @@ export type PlanEnvChangeRequest = Message<"maurice.v1.PlanEnvChangeRequest"> & 
  * Use `create(PlanEnvChangeRequestSchema)` to create a new message.
  */
 export const PlanEnvChangeRequestSchema: GenMessage<PlanEnvChangeRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 13);
+  messageDesc(file_maurice_v1_services, 15);
 
 /**
  * @generated from message maurice.v1.PlanPublishPortRequest
@@ -471,7 +538,7 @@ export type PlanPublishPortRequest = Message<"maurice.v1.PlanPublishPortRequest"
  * Use `create(PlanPublishPortRequestSchema)` to create a new message.
  */
 export const PlanPublishPortRequestSchema: GenMessage<PlanPublishPortRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 14);
+  messageDesc(file_maurice_v1_services, 16);
 
 /**
  * @generated from message maurice.v1.PlanDeleteServiceRequest
@@ -493,7 +560,38 @@ export type PlanDeleteServiceRequest = Message<"maurice.v1.PlanDeleteServiceRequ
  * Use `create(PlanDeleteServiceRequestSchema)` to create a new message.
  */
 export const PlanDeleteServiceRequestSchema: GenMessage<PlanDeleteServiceRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 15);
+  messageDesc(file_maurice_v1_services, 17);
+
+/**
+ * @generated from message maurice.v1.PlanUpsertServiceRequest
+ */
+export type PlanUpsertServiceRequest = Message<"maurice.v1.PlanUpsertServiceRequest"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * Project is created on first use.
+   *
+   * @generated from field: string project = 2;
+   */
+  project: string;
+
+  /**
+   * Full desired definition; `id` and `project_id` are ignored.
+   *
+   * @generated from field: maurice.v1.Service service = 3;
+   */
+  service?: Service | undefined;
+};
+
+/**
+ * Describes the message maurice.v1.PlanUpsertServiceRequest.
+ * Use `create(PlanUpsertServiceRequestSchema)` to create a new message.
+ */
+export const PlanUpsertServiceRequestSchema: GenMessage<PlanUpsertServiceRequest> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_services, 18);
 
 /**
  * @generated from message maurice.v1.RestartRequest
@@ -510,7 +608,7 @@ export type RestartRequest = Message<"maurice.v1.RestartRequest"> & {
  * Use `create(RestartRequestSchema)` to create a new message.
  */
 export const RestartRequestSchema: GenMessage<RestartRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 16);
+  messageDesc(file_maurice_v1_services, 19);
 
 /**
  * @generated from message maurice.v1.StopRequest
@@ -527,7 +625,7 @@ export type StopRequest = Message<"maurice.v1.StopRequest"> & {
  * Use `create(StopRequestSchema)` to create a new message.
  */
 export const StopRequestSchema: GenMessage<StopRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_services, 17);
+  messageDesc(file_maurice_v1_services, 20);
 
 /**
  * @generated from service maurice.v1.Services
@@ -560,6 +658,14 @@ export const Services: GenService<{
     output: typeof UnitFileSchema;
   },
   /**
+   * @generated from rpc maurice.v1.Services.GetStatus
+   */
+  getStatus: {
+    methodKind: "unary";
+    input: typeof GetStatusRequestSchema;
+    output: typeof ServiceStatusSchema;
+  },
+  /**
    * @generated from rpc maurice.v1.Services.Logs
    */
   logs: {
@@ -576,7 +682,17 @@ export const Services: GenService<{
     output: typeof StatsSampleSchema;
   },
   /**
-   * scope: plan
+   * scope: plan. Create or replace a service definition; apply writes the units.
+   *
+   * @generated from rpc maurice.v1.Services.PlanUpsert
+   */
+  planUpsert: {
+    methodKind: "unary";
+    input: typeof PlanUpsertServiceRequestSchema;
+    output: typeof PlanSchema;
+  },
+  /**
+   * scope: plan. Start (or restart) the service from its current units.
    *
    * @generated from rpc maurice.v1.Services.PlanDeploy
    */

@@ -12,7 +12,9 @@
     "@bufbuild/protobuf": "^2.16.0",
     "@connectrpc/connect": "^2.2.0",
     "@connectrpc/connect-web": "^2.2.0",
+    "@kobalte/core": "0.13.14",
     "@maurice/ui": "workspace:*",
+    "@solidjs/router": "1.0.0",
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
