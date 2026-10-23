@@ -165,7 +165,8 @@ pub fn has_errors(findings: &[Finding]) -> bool {
     findings.iter().any(|f| f.severity == Severity::Error)
 }
 
-fn is_dns_label(s: &str) -> bool {
+/// Workspace and service names are DNS labels: lowercase letters, digits, dashes, 1-63 chars.
+pub fn is_dns_label(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 63
         && s.bytes()

@@ -29,6 +29,22 @@ impl Tier {
         }
     }
 
+    /// The forced tier still needs an explicit opt-in so a shell alias cannot bypass it.
+    pub fn require_force_guard(self) -> anyhow::Result<()> {
+        if self != Tier::OdysseusStella {
+            return Ok(());
+        }
+        let flag = std::env::args().any(|a| a == "--yes-i-mean-it");
+        let env = std::env::var("MAURICE_FORCE")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        if flag || env {
+            Ok(())
+        } else {
+            anyhow::bail!("forced tier requires --yes-i-mean-it or MAURICE_FORCE=1")
+        }
+    }
+
     pub fn require_at_least(self, min: Tier) -> anyhow::Result<()> {
         if self >= min {
             Ok(())

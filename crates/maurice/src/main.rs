@@ -3,6 +3,7 @@
 //! confirmation on destructive actions, `maurice-odysseus-stella` for forced,
 //! scripted recovery behind an extra guard.
 
+mod ctl;
 mod host;
 mod tier;
 
@@ -17,6 +18,17 @@ use tier::Tier;
     about = "Maurice PaaS: deploy on rootless Podman"
 )]
 struct Cli {
+    /// Panel address for client commands.
+    #[arg(
+        long,
+        global = true,
+        env = "MAURICE_SERVER",
+        default_value = "http://127.0.0.1:7700"
+    )]
+    server: String,
+    /// Accepted by the forced tier only; see ADR-007.
+    #[arg(long = "yes-i-mean-it", global = true, hide = true)]
+    _yes_i_mean_it: bool,
     #[command(subcommand)]
     command: Command,
 }
@@ -28,6 +40,22 @@ enum Command {
         /// Address to listen on. Keep it on loopback until an edge proxy is in front.
         #[arg(long, env = "MAURICE_LISTEN", default_value = "127.0.0.1:7700")]
         listen: String,
+        /// PostgreSQL connection string. Defaults to DATABASE_URL from the environment or /etc/maurice/maurice.env.
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: Option<String>,
+        /// Record host operations instead of performing them (no root needed).
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Workspaces (through the panel).
+    Workspace {
+        #[command(subcommand)]
+        command: ctl::WorkspaceCommand,
+    },
+    /// Plans (through the panel).
+    Plan {
+        #[command(subcommand)]
+        command: ctl::PlanCommand,
     },
     /// Render the Quadlet units a workspace definition would produce, without touching the host.
     Render {
@@ -93,10 +121,36 @@ async fn main() -> anyhow::Result<()> {
         Command::Host { command } => {
             host::run(command, tier).await?;
         }
-        Command::Serve { listen } => {
+        Command::Workspace { command } => ctl::workspace(command, &cli.server, tier).await?,
+        Command::Plan { command } => ctl::plan(command, &cli.server, tier).await?,
+        Command::Serve {
+            listen,
+            database_url,
+            dry_run,
+        } => {
             tier.require_at_least(Tier::Maurice)?;
-            let agent: Arc<dyn maurice_agent::Agent> = Arc::new(maurice_agent::DryRunAgent::new());
-            let state = Arc::new(maurice_api::services::State::new(agent));
+            let database_url = match database_url {
+                Some(u) => u,
+                None => read_env_file_var("/etc/maurice/maurice.env", "DATABASE_URL").ok_or_else(
+                    || {
+                        anyhow::anyhow!(
+                            "no DATABASE_URL; pass --database-url or run `maurice host prepare`"
+                        )
+                    },
+                )?,
+            };
+            let pool = maurice_db::connect(&database_url).await?;
+            let agent: Arc<dyn maurice_agent::Agent> = if dry_run {
+                tracing::warn!("dry-run agent: host operations are recorded, not performed");
+                Arc::new(maurice_agent::DryRunAgent::new())
+            } else {
+                maurice_agent::HostAgent::check_privileges()?;
+                Arc::new(maurice_agent::HostAgent::new())
+            };
+            let state = Arc::new(maurice_api::services::State::new(
+                agent,
+                maurice_db::Store::new(pool),
+            ));
             let app = maurice_api::app(state);
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             tracing::info!(%listen, %tier, "maurice serving");
@@ -104,4 +158,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Read `KEY=value` from a simple env file; quotes around the value are stripped.
+fn read_env_file_var(path: &str, key: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().find_map(|l| {
+        let l = l.trim();
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == key).then(|| v.trim().trim_matches('"').to_string())
+    })
 }

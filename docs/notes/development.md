@@ -29,11 +29,29 @@ pnpm typecheck
 
 ## Run
 
+The panel needs PostgreSQL. On a prepared host (`sudo maurice host prepare` installs it as a
+system Quadlet unit and writes `/etc/maurice/maurice.env`) just run `sudo maurice serve`.
+Locally, point it at any PostgreSQL and use the dry-run agent:
+
 ```
-cargo run -- serve                 # API on 127.0.0.1:7700 with the dry-run agent
-pnpm dev                           # SPA on 5173, proxies /maurice.v1.* to 7700
-cargo run -- render examples/shop.json   # print the units a workspace would produce
+podman run -d --name maurice-pg -e POSTGRES_PASSWORD=dev -e POSTGRES_USER=maurice -e POSTGRES_DB=maurice -p 127.0.0.1:5432:5432 docker.io/library/postgres:16
+cargo run -- serve --dry-run --database-url postgres://maurice:dev@127.0.0.1:5432/maurice
+pnpm dev                                  # SPA on 5173, proxies /maurice.v1.* to 7700
+cargo run -- render examples/shop.json    # print the units a workspace would produce
 ```
+
+Client commands talk to the panel (`--server`, default `http://127.0.0.1:7700`):
+
+```
+marik workspace create shop               # returns a plan
+marik plan apply <plan-id>                # creates the user through the agent
+marik workspace list
+maurice workspace delete <id> --purge     # destructive plan
+maurice plan apply <plan-id> --confirm    # marik refuses this one
+```
+
+In the VM: `scripts/vm-run.sh host prepare`, then start the panel as a transient unit and use the
+same commands over SSH (see `docs/notes/dev-vm.md`).
 
 Try the API without the UI:
 

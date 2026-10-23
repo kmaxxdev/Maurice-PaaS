@@ -47,3 +47,17 @@ Two host facts learned on the way, both now handled by the agent:
 
 - `loginctl enable-linger` starts the user manager asynchronously. The agent starts `user@<uid>.service` explicitly and polls `systemctl --user -M <user>@ is-system-running` before the first call, otherwise `systemd-run -M` fails with "Transport endpoint is not connected".
 - Ubuntu 26.04's AppArmor profile for pasta accepts signals only from unconfined peers, while podman carries the `podman` label. Stopping any rootless container then fails at `podman rm` with `rootless netns: kill network process: permission denied` and systemd marks the unit failed. `maurice host prepare` adds `signal (receive) peer=podman,` through the profile's local override and reloads it. This affects every Podman user on Ubuntu 26.04, not only Maurice.
+
+## Panel in the VM, 2026-10-23
+
+```
+scripts/vm-run.sh host prepare      # AppArmor fix + system PostgreSQL (maurice-postgres.service)
+scripts/vm-run.sh tier              # also installs marik / maurice-odysseus-stella symlinks
+ssh dev@<ip> 'sudo systemd-run --unit maurice-dev --collect -p EnvironmentFile=/etc/maurice/maurice.env /usr/local/bin/maurice serve'
+ssh dev@<ip> 'marik workspace create shop && marik plan apply <id> && marik workspace list'
+```
+
+Verified: create plan → apply creates `ws-shop` through the agent and stores the row; `marik` refuses
+the destructive delete plan, `maurice` needs `--confirm`; after apply the host has no user, home or
+subuid entry. Quadlet-generated units cannot be `systemctl enable`d; `[Install]` in the unit file
+does that, so the installer only starts them.

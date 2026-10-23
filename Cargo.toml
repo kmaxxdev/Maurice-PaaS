@@ -33,7 +33,7 @@ connectrpc = { version = "0.9", features = ["axum", "server", "client"] }
 connectrpc-build = "0.9"
 buffa = "0.9"
 buffa-types = { version = "0.9", features = ["json"] }
-sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "migrate"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "time", "json", "migrate"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 time = { version = "0.3", features = ["serde"] }
 async-trait = "0.1"
