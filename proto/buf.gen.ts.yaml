@@ -1,5 +1,7 @@
 version: v2
+# protoc-gen-es is a workspace devDependency, so generation works offline and
+# without a buf.build account.
 plugins:
-  - remote: buf.build/bufbuild/es:v2.16.0
+  - local: ../node_modules/.bin/protoc-gen-es
     out: ../packages/web/src/gen
     opt: target=ts

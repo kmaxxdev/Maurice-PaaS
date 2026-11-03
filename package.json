@@ -7,5 +7,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "proto": "cd proto && buf generate --template buf.gen.ts.yaml"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.16.0"
   }
 }
