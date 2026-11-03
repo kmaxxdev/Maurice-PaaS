@@ -651,23 +651,23 @@ impl Agent for HostAgent {
         let dockerfile = dir.join(&spec.dockerfile).to_string_lossy().into_owned();
         let context = dir.join(&spec.context).to_string_lossy().into_owned();
         tracing::info!(user = %user.name, %image_ref, "building image");
-        let out = self
-            .run_as_user_env(
-                user,
-                &[],
-                &[
-                    "podman",
-                    "build",
-                    "--pull=newer",
-                    "-t",
-                    &image_ref,
-                    "-f",
-                    &dockerfile,
-                    &context,
-                ],
-                b"",
-            )
-            .await?;
+        let mut build_args: Vec<String> = Vec::new();
+        for (k, v) in &spec.args {
+            let ok = !k.is_empty()
+                && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && !v.contains('\n');
+            if !ok {
+                return Err(AgentError::Refused(format!("invalid build arg '{k}'")));
+            }
+            build_args.push(format!("{k}={v}"));
+        }
+        let mut cmd: Vec<&str> = vec!["podman", "build", "--pull=newer", "-t", &image_ref];
+        for a in &build_args {
+            cmd.push("--build-arg");
+            cmd.push(a);
+        }
+        cmd.extend_from_slice(&["-f", &dockerfile, &context]);
+        let out = self.run_as_user_env(user, &[], &cmd, b"").await?;
         let lines: Vec<&str> = out.lines().collect();
         let log_tail = lines[lines.len().saturating_sub(20)..].join("\n");
         Ok(BuildResult {

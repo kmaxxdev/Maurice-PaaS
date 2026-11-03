@@ -265,6 +265,8 @@ pub struct ServiceRow {
     pub image_ref: Option<String>,
     pub dockerfile: Option<String>,
     pub build_context: Option<String>,
+    /// `{"KEY": "value"}` for build sources.
+    pub build_args: serde_json::Value,
     pub cpu: Option<f32>,
     pub memory_bytes: Option<i64>,
     pub isolated: bool,
@@ -507,10 +509,10 @@ impl Store {
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "insert into services (id, environment_id, project_id, name, kind, source_kind, image_ref, dockerfile, build_context, cpu, memory_bytes, isolated, health_cmd, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            "insert into services (id, environment_id, project_id, name, kind, source_kind, image_ref, dockerfile, build_context, build_args, cpu, memory_bytes, isolated, health_cmd, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              on conflict (id) do update set kind = excluded.kind, source_kind = excluded.source_kind, image_ref = excluded.image_ref,
-               dockerfile = excluded.dockerfile, build_context = excluded.build_context, cpu = excluded.cpu, memory_bytes = excluded.memory_bytes,
+               dockerfile = excluded.dockerfile, build_context = excluded.build_context, build_args = excluded.build_args, cpu = excluded.cpu, memory_bytes = excluded.memory_bytes,
                isolated = excluded.isolated, health_cmd = excluded.health_cmd",
         )
         .bind(s.id)
@@ -522,6 +524,7 @@ impl Store {
         .bind(&s.image_ref)
         .bind(&s.dockerfile)
         .bind(&s.build_context)
+        .bind(&s.build_args)
         .bind(s.cpu)
         .bind(s.memory_bytes)
         .bind(s.isolated)

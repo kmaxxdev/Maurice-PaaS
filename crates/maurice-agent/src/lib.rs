@@ -167,6 +167,9 @@ pub struct BuildSpec {
     /// Dockerfile path and context directory, both relative to the repository root.
     pub dockerfile: String,
     pub context: String,
+    /// `--build-arg KEY=value` pairs.
+    #[serde(default)]
+    pub args: Vec<(String, String)>,
     /// Image name without tag, e.g. `localhost/shop/web`; the tag becomes the commit sha.
     pub image: String,
     /// Scratch name for the checkout directory, e.g. the service name.

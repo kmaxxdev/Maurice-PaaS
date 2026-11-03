@@ -73,12 +73,21 @@ pub fn service_from_proto(
             ("image", Some(r.clone()), None, None)
         }
         Some(oneof::service::Source::DockerfilePath(p)) if !p.is_empty() => {
-            // The build context is the Dockerfile's directory inside the repository.
-            let context = std::path::Path::new(p)
-                .parent()
-                .map(|d| d.to_string_lossy().into_owned())
-                .filter(|d| !d.is_empty())
-                .unwrap_or_else(|| ".".into());
+            // The build context is given, or the Dockerfile's directory inside the repository.
+            let context = if svc.build_context.trim().is_empty() {
+                std::path::Path::new(p)
+                    .parent()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .filter(|d| !d.is_empty())
+                    .unwrap_or_else(|| ".".into())
+            } else {
+                svc.build_context.trim().trim_end_matches('/').to_string()
+            };
+            if context.starts_with('/') || context.split('/').any(|c| c == "..") {
+                return Err(invalid(
+                    "build context must be a relative path inside the repository",
+                ));
+            }
             ("build", None, Some(p.clone()), Some(context))
         }
         _ => return Err(invalid("source must be image_ref or dockerfile_path")),
@@ -93,6 +102,12 @@ pub fn service_from_proto(
         image_ref,
         dockerfile,
         build_context,
+        build_args: serde_json::Value::Object(
+            svc.build_args
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
+        ),
         cpu: (svc.cpu > 0.0).then_some(svc.cpu as f32),
         memory_bytes: (svc.memory > 0).then_some(svc.memory as i64),
         isolated: svc.isolated,
@@ -215,8 +230,26 @@ pub fn service_to_proto(
         memory: s.memory_bytes.unwrap_or(0) as u64,
         isolated: s.isolated,
         environment: env_to_proto(&full.environment).into(),
+        build_context: if s.source_kind == "build" {
+            s.build_context.clone().unwrap_or_default()
+        } else {
+            String::new()
+        },
+        build_args: build_args_of(s).into_iter().collect(),
         ..Default::default()
     }
+}
+
+/// Build args of a row as an ordered map.
+fn build_args_of(s: &ServiceRow) -> std::collections::BTreeMap<String, String> {
+    s.build_args
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Rows → domain model, for the validator and the renderer. `secret_name` must
@@ -237,6 +270,7 @@ pub fn service_to_core(
             maurice_core::Source::Build {
                 dockerfile: s.dockerfile.clone().unwrap_or_else(|| "Dockerfile".into()),
                 context: s.build_context.clone().unwrap_or_else(|| ".".into()),
+                args: build_args_of(s),
             }
         } else {
             maurice_core::Source::Image {
@@ -319,7 +353,24 @@ pub fn service_to_core(
 /// Where well-known images keep their data; `/data` otherwise.
 fn default_data_dir(image: Option<&str>) -> String {
     match image.unwrap_or("") {
-        i if i.contains("postgres") => "/var/lib/postgresql/data".into(),
+        // The official image moved PGDATA under /var/lib/postgresql/<major>/ in 18 and
+        // refuses a mount at the old /var/lib/postgresql/data.
+        i if i.contains("postgres") => {
+            let major: u32 = i
+                .rsplit(':')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0);
+            if major >= 18 {
+                "/var/lib/postgresql".into()
+            } else {
+                "/var/lib/postgresql/data".into()
+            }
+        }
         i if i.contains("clickhouse") => "/var/lib/clickhouse".into(),
         i if i.contains("dragonfly") || i.contains("valkey") || i.contains("redis") => {
             "/data".into()

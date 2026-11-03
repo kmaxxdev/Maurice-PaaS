@@ -156,7 +156,13 @@ pub enum Source {
     /// Pull by reference; digests are preferred once a deployment exists.
     Image { reference: String },
     /// Build from a Dockerfile in the project repository; tagged by git sha.
-    Build { dockerfile: String, context: String },
+    Build {
+        dockerfile: String,
+        context: String,
+        /// `--build-arg` values, e.g. public URLs a front-end inlines at build time.
+        #[serde(default)]
+        args: std::collections::BTreeMap<String, String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

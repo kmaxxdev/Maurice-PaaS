@@ -44,6 +44,10 @@ message Service {
   bool isolated = 11;
   // Environment the service runs in.
   Env environment = 12;
+  // Build sources only: context directory relative to the repository root
+  // (empty = the Dockerfile's directory) and `--build-arg` values.
+  string build_context = 13;
+  map<string, string> build_args = 14;
 }
 
 message UnitFile {
