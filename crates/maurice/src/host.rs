@@ -52,6 +52,11 @@ pub enum HostCommand {
         uid: u32,
         unit: String,
     },
+    /// Set a new random password for a panel user and print it once; ends their sessions.
+    PasswordReset {
+        /// Panel login, e.g. admin.
+        login: String,
+    },
     /// Full cycle on a throwaway workspace: create user, run postgres from generated units, verify, tear down.
     Selftest {
         #[arg(long, default_value = "selftest")]
@@ -120,6 +125,21 @@ pub async fn run(cmd: HostCommand, tier: Tier) -> anyhow::Result<()> {
                 st.since_unix
                     .map(|t| format!(" since {t}"))
                     .unwrap_or_default()
+            );
+        }
+        HostCommand::PasswordReset { login } => {
+            tier.require_at_least(Tier::Maurice)?;
+            let store = panel_store().await?;
+            let Some(u) = store.get_user_by_login(&login).await? else {
+                anyhow::bail!("no panel user '{login}'");
+            };
+            let password = maurice_api::auth::generate_password();
+            store
+                .set_password(u.id, &maurice_api::auth::hash_password(&password)?)
+                .await?;
+            store.delete_sessions_of(u.id).await?;
+            println!(
+                "password for {login} reset; sign in once with it and change it:\n\n    {password}\n"
             );
         }
         HostCommand::Selftest {
@@ -407,6 +427,7 @@ async fn prepare_host() -> anyhow::Result<()> {
     install_panel_postgres().await?;
     ensure_master_key()?;
     ensure_port_range()?;
+    ensure_first_admin().await?;
     configure_journald().await?;
     install_panel_unit().await?;
     println!("host prepared");
@@ -537,6 +558,42 @@ fn random_token(len: usize) -> String {
     buf.iter()
         .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
         .collect()
+}
+
+/// Connect to the panel database named in the env file; runs migrations.
+async fn panel_store() -> anyhow::Result<maurice_db::Store> {
+    let url =
+        crate::read_env_file_var("/etc/maurice/maurice.env", "DATABASE_URL").ok_or_else(|| {
+            anyhow::anyhow!(
+                "no DATABASE_URL in /etc/maurice/maurice.env; run `maurice host prepare`"
+            )
+        })?;
+    Ok(maurice_db::Store::new(maurice_db::connect(&url).await?))
+}
+
+/// Create the first administrator when the panel has no users yet (ADR-011) and
+/// print its password once.
+async fn ensure_first_admin() -> anyhow::Result<()> {
+    let store = panel_store().await?;
+    if store.count_users().await? > 0 {
+        println!("users: present, nothing to do");
+        return Ok(());
+    }
+    let password = maurice_api::auth::generate_password();
+    store
+        .insert_user(&maurice_db::UserRow {
+            id: uuid::Uuid::now_v7(),
+            login: "admin".into(),
+            password_hash: maurice_api::auth::hash_password(&password)?,
+            role: "admin".into(),
+            disabled: false,
+            created_at: time::OffsetDateTime::now_utc(),
+        })
+        .await?;
+    println!(
+        "users: first administrator created; sign in once with this password and change it:\n\n    login:    admin\n    password: {password}\n"
+    );
+    Ok(())
 }
 
 /// Append `MAURICE_PORT_RANGE` to the env file if it is missing: the host port range

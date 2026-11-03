@@ -2,6 +2,7 @@
 //! agent. A plan is stored with a typed payload (`PlanPayload`) that `apply`
 //! executes step by step while streaming events.
 
+use crate::auth::{self, Need, Principal};
 use crate::crypto::MasterKey;
 use crate::model_map;
 use crate::model_map::{env_from_proto, env_to_proto, podman_secret_name};
@@ -38,6 +39,19 @@ impl State {
             home_root: "/srv/ws".into(),
             port_range: (20000, 39999),
         }
+    }
+}
+
+impl State {
+    /// Resolve the caller and check what the handler needs.
+    pub async fn require(
+        &self,
+        ctx: &RequestContext,
+        need: Need,
+    ) -> Result<Principal, ConnectError> {
+        let p = auth::resolve(self, ctx).await?;
+        auth::authorize(&p, &need)?;
+        Ok(p)
     }
 }
 
@@ -99,6 +113,7 @@ pub enum PlanPayload {
     /// Start or restart from the current units; for build sources, clone and build first.
     DeployService {
         workspace_id: Uuid,
+        environment: String,
         service_id: Uuid,
         unit: String,
         image: String,
@@ -106,6 +121,7 @@ pub enum PlanPayload {
     },
     DeleteService {
         workspace_id: Uuid,
+        environment: String,
         service_id: Uuid,
         unit: String,
         unit_files: Vec<String>,
@@ -282,6 +298,7 @@ fn plan_to_proto(p: &PlanRow) -> Result<Plan, ConnectError> {
 
 async fn store_plan(
     state: &State,
+    created_by: &Principal,
     workspace_id: Uuid,
     payload: PlanPayload,
     changes: Vec<StoredChange>,
@@ -295,7 +312,7 @@ async fn store_plan(
         changes: serde_json::to_value(StoredChanges { payload, changes }).map_err(internal)?,
         findings: serde_json::to_value(findings).map_err(internal)?,
         destructive,
-        created_by: "anonymous".into(),
+        created_by: created_by.name(),
         created_at: now,
         expires_at: now + Duration::hours(1),
         applied_at: None,
@@ -602,12 +619,13 @@ pub struct WorkspacesSvc {
 impl Workspaces for WorkspacesSvc {
     async fn list(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         _req: ServiceRequest<'_, ListWorkspacesRequest>,
     ) -> ServiceResult<ListWorkspacesResponse> {
+        let p = self.state.require(&ctx, Need::read()).await?;
         let rows = self.state.store.list_workspaces().await.map_err(internal)?;
         let mut out = Vec::with_capacity(rows.len());
-        for w in &rows {
+        for w in rows.iter().filter(|w| p.can_see(w.id)) {
             let envs = self
                 .state
                 .store
@@ -624,10 +642,11 @@ impl Workspaces for WorkspacesSvc {
 
     async fn get(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetWorkspaceRequest>,
     ) -> ServiceResult<Workspace> {
         let id = parse_uuid(req.id, "workspace")?;
+        self.state.require(&ctx, Need::read().workspace(id)).await?;
         match self.state.store.get_workspace(id).await.map_err(internal)? {
             Some(w) => {
                 let envs = self
@@ -644,10 +663,13 @@ impl Workspaces for WorkspacesSvc {
 
     async fn get_ports(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetPortsRequest>,
     ) -> ServiceResult<WorkspacePorts> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        self.state
+            .require(&ctx, Need::read().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let block = model_map::port_block_of(&loaded.ws);
         let mut used: Vec<UsedPort> = Vec::new();
@@ -679,10 +701,14 @@ impl Workspaces for WorkspacesSvc {
 
     async fn plan_add_environment(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanAddEnvironmentRequest>,
     ) -> ServiceResult<Plan> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let p = self
+            .state
+            .require(&ctx, Need::plan().admin().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let name = env_required(req.environment)?;
         let env = core_env(name)?;
@@ -709,14 +735,15 @@ impl Workspaces for WorkspacesSvc {
             workspace_id: wid,
             environment: name.into(),
         };
-        Response::ok(store_plan(&self.state, wid, payload, changes, findings).await?)
+        Response::ok(store_plan(&self.state, &p, wid, payload, changes, findings).await?)
     }
 
     async fn plan_create(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanCreateWorkspaceRequest>,
     ) -> ServiceResult<Plan> {
+        let p = self.state.require(&ctx, Need::plan().admin()).await?;
         let name = req.name.to_string();
         let environments = requested_environments(&req.environments)?;
         let mut findings = Vec::new();
@@ -827,15 +854,19 @@ impl Workspaces for WorkspacesSvc {
             port_block_start: port_block.start as i32,
             port_block_size: port_block.size as i32,
         };
-        Response::ok(store_plan(&self.state, Uuid::nil(), payload, changes, findings).await?)
+        Response::ok(store_plan(&self.state, &p, Uuid::nil(), payload, changes, findings).await?)
     }
 
     async fn plan_delete(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanDeleteWorkspaceRequest>,
     ) -> ServiceResult<Plan> {
         let id = parse_uuid(req.id, "workspace")?;
+        let p = self
+            .state
+            .require(&ctx, Need::plan().admin().workspace(id))
+            .await?;
         let Some(w) = self.state.store.get_workspace(id).await.map_err(internal)? else {
             return Err(not_found("workspace", req.id));
         };
@@ -859,7 +890,7 @@ impl Workspaces for WorkspacesSvc {
             uid: w.uid,
             purge: req.purge,
         };
-        Response::ok(store_plan(&self.state, w.id, payload, changes, vec![]).await?)
+        Response::ok(store_plan(&self.state, &p, w.id, payload, changes, vec![]).await?)
     }
 }
 
@@ -907,10 +938,13 @@ impl ServicesSvc {
 impl Services for ServicesSvc {
     async fn get_status(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetStatusRequest>,
     ) -> ServiceResult<ServiceStatus> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .require(&ctx, Need::read().workspace(loaded.ws.id))
+            .await?;
         let st = self
             .state
             .agent
@@ -944,10 +978,13 @@ impl Services for ServicesSvc {
 
     async fn list(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, ListServicesRequest>,
     ) -> ServiceResult<ListServicesResponse> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        self.state
+            .require(&ctx, Need::read().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let name = loaded.secret_name();
         let only = env_from_proto(req.environment);
@@ -964,19 +1001,25 @@ impl Services for ServicesSvc {
 
     async fn get(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetServiceRequest>,
     ) -> ServiceResult<Service> {
         let (t, loaded) = self.service_and_workspace(req.id).await?;
+        self.state
+            .require(&ctx, Need::read().workspace(loaded.ws.id))
+            .await?;
         Response::ok(model_map::service_to_proto(&t.full, &loaded.secret_name()))
     }
 
     async fn get_unit(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetUnitRequest>,
     ) -> ServiceResult<UnitFile> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .require(&ctx, Need::read().workspace(loaded.ws.id))
+            .await?;
         let file_name = format!("{}.container", t.stem);
         let content = self
             .state
@@ -1003,10 +1046,13 @@ impl Services for ServicesSvc {
 
     async fn logs(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, LogsRequest>,
     ) -> ServiceResult<ServiceStream<LogLine>> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .require(&ctx, Need::read().workspace(loaded.ws.id))
+            .await?;
         let unit = t.unit;
         let tail = if req.tail == 0 { 200 } else { req.tail };
         let since = Some(loaded.ws.created_at.unix_timestamp() as u64);
@@ -1067,10 +1113,13 @@ impl Services for ServicesSvc {
 
     async fn stats(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, StatsRequest>,
     ) -> ServiceResult<ServiceStream<StatsSample>> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        self.state
+            .require(&ctx, Need::read().workspace(loaded.ws.id))
+            .await?;
         let agent = self.state.agent.clone();
         let user = loaded.user.clone();
         let name = t.stem;
@@ -1128,10 +1177,14 @@ impl Services for ServicesSvc {
 
     async fn plan_upsert(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanUpsertServiceRequest>,
     ) -> ServiceResult<Plan> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let p = self
+            .state
+            .require(&ctx, Need::plan().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let owned: PlanUpsertServiceRequest = req.to_owned_message();
         let Some(svc) = owned.service.into_option() else {
@@ -1170,6 +1223,7 @@ impl Services for ServicesSvc {
             }
         };
         let env = core_env(&env_name)?;
+        auth::authorize(&p, &Need::plan().env(env).workspace(wid))?;
         let Some(env_row) = loaded.environment(&env_name) else {
             return Err(invalid(format!(
                 "workspace '{}' has no {env_name} environment; add it first",
@@ -1394,15 +1448,19 @@ impl Services for ServicesSvc {
             units,
             running_unit: running.then_some(unit),
         };
-        Response::ok(store_plan(&self.state, wid, payload, changes, findings).await?)
+        Response::ok(store_plan(&self.state, &p, wid, payload, changes, findings).await?)
     }
 
     async fn plan_deploy(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanDeployRequest>,
     ) -> ServiceResult<Plan> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        let p = self
+            .state
+            .require(&ctx, Need::plan().env(t.env).workspace(loaded.ws.id))
+            .await?;
         let full = &t.full;
         let core = loaded.core();
         let core_svc = core
@@ -1487,19 +1545,21 @@ impl Services for ServicesSvc {
         });
         let payload = PlanPayload::DeployService {
             workspace_id: loaded.ws.id,
+            environment: t.env.to_string(),
             service_id: full.service.id,
             unit,
             image,
             build,
         };
-        Response::ok(store_plan(&self.state, loaded.ws.id, payload, changes, findings).await?)
+        Response::ok(store_plan(&self.state, &p, loaded.ws.id, payload, changes, findings).await?)
     }
 
     async fn plan_env_change(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         _req: ServiceRequest<'_, PlanEnvChangeRequest>,
     ) -> ServiceResult<Plan> {
+        self.state.require(&ctx, Need::plan()).await?;
         Err(ConnectError::new(
             ErrorCode::Unimplemented,
             "use PlanUpsert with the full definition for now",
@@ -1508,9 +1568,10 @@ impl Services for ServicesSvc {
 
     async fn plan_publish_port(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         _req: ServiceRequest<'_, PlanPublishPortRequest>,
     ) -> ServiceResult<Plan> {
+        self.state.require(&ctx, Need::plan()).await?;
         Err(ConnectError::new(
             ErrorCode::Unimplemented,
             "use PlanUpsert with the full definition for now",
@@ -1519,10 +1580,14 @@ impl Services for ServicesSvc {
 
     async fn plan_delete(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, PlanDeleteServiceRequest>,
     ) -> ServiceResult<Plan> {
         let (t, loaded) = self.service_and_workspace(req.id).await?;
+        let p = self
+            .state
+            .require(&ctx, Need::plan().env(t.env).workspace(loaded.ws.id))
+            .await?;
         let full = &t.full;
         let core = loaded.core();
         let core_svc = core
@@ -1561,39 +1626,62 @@ impl Services for ServicesSvc {
         }
         let payload = PlanPayload::DeleteService {
             workspace_id: loaded.ws.id,
+            environment: t.env.to_string(),
             service_id: full.service.id,
             unit,
             unit_files,
             purge_volumes: req.purge_volumes,
         };
-        Response::ok(store_plan(&self.state, loaded.ws.id, payload, changes, vec![]).await?)
+        Response::ok(store_plan(&self.state, &p, loaded.ws.id, payload, changes, vec![]).await?)
     }
 
     async fn restart(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, RestartRequest>,
     ) -> ServiceResult<Empty> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
-        self.state
-            .agent
-            .restart_unit(&loaded.user, &t.unit)
-            .await
-            .map_err(internal)?;
+        let p = self
+            .state
+            .require(&ctx, Need::apply().env(t.env).workspace(loaded.ws.id))
+            .await?;
+        let target = format!("{}/{}", loaded.ws.name, t.stem);
+        let r = self.state.agent.restart_unit(&loaded.user, &t.unit).await;
+        auth::audit(
+            &self.state,
+            Some(&p),
+            "service.restart",
+            &target,
+            if r.is_ok() { "ok" } else { "failed" },
+            r.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
+        )
+        .await;
+        r.map_err(internal)?;
         Response::ok(Empty::default())
     }
 
     async fn stop(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, StopRequest>,
     ) -> ServiceResult<Empty> {
         let (t, loaded) = self.service_and_workspace(req.service_id).await?;
-        self.state
-            .agent
-            .stop_unit(&loaded.user, &t.unit)
-            .await
-            .map_err(internal)?;
+        let p = self
+            .state
+            .require(&ctx, Need::apply().env(t.env).workspace(loaded.ws.id))
+            .await?;
+        let target = format!("{}/{}", loaded.ws.name, t.stem);
+        let r = self.state.agent.stop_unit(&loaded.user, &t.unit).await;
+        auth::audit(
+            &self.state,
+            Some(&p),
+            "service.stop",
+            &target,
+            if r.is_ok() { "ok" } else { "failed" },
+            r.as_ref().err().map(|e| e.to_string()).unwrap_or_default(),
+        )
+        .await;
+        r.map_err(internal)?;
         Response::ok(Empty::default())
     }
 }
@@ -1628,10 +1716,13 @@ fn project_to_proto(
 impl Projects for ProjectsSvc {
     async fn list(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, ListProjectsRequest>,
     ) -> ServiceResult<ListProjectsResponse> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        self.state
+            .require(&ctx, Need::read().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let name = loaded.secret_name();
         Response::ok(ListProjectsResponse {
@@ -1646,10 +1737,14 @@ impl Projects for ProjectsSvc {
 
     async fn upsert(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, UpsertProjectRequest>,
     ) -> ServiceResult<Project> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let p = self
+            .state
+            .require(&ctx, Need::apply().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         if !maurice_core::validate::is_dns_label(req.name) {
             return Err(invalid("project name must be a DNS label"));
@@ -1681,6 +1776,15 @@ impl Projects for ProjectsSvc {
             .upsert_project(wid, req.name, git_repo.as_deref(), git_ref, key_id)
             .await
             .map_err(internal)?;
+        auth::audit(
+            &self.state,
+            Some(&p),
+            "project.set",
+            format!("{}/{}", loaded.ws.name, req.name),
+            "ok",
+            git_repo.clone().unwrap_or_default(),
+        )
+        .await;
         Response::ok(project_to_proto(&row, &loaded.secret_name()))
     }
 }
@@ -1717,10 +1821,13 @@ fn secret_to_proto(s: &maurice_db::SecretRow, environment: Option<&str>) -> Secr
 impl Secrets for SecretsSvc {
     async fn list(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, ListSecretsRequest>,
     ) -> ServiceResult<ListSecretsResponse> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        self.state
+            .require(&ctx, Need::read().workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         let rows = self.state.store.list_secrets(wid).await.map_err(internal)?;
         Response::ok(ListSecretsResponse {
@@ -1739,10 +1846,15 @@ impl Secrets for SecretsSvc {
 
     async fn set(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, SetSecretRequest>,
     ) -> ServiceResult<SecretInfo> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let env_kind = env_from_proto(req.environment).and_then(CoreEnv::parse);
+        let p = self
+            .state
+            .require(&ctx, Need::apply().env_opt(env_kind).workspace(wid))
+            .await?;
         let loaded = load(&self.state, wid).await?;
         maurice_agent::host::validate_secret_name(req.name).map_err(|e| invalid(e.to_string()))?;
         if req.value.is_empty() {
@@ -1780,6 +1892,20 @@ impl Secrets for SecretsSvc {
             .insert_secret_version(wid, environment_id, req.name, &sealed)
             .await
             .map_err(internal)?;
+        auth::audit(
+            &self.state,
+            Some(&p),
+            "secret.set",
+            format!(
+                "{}/{}/{}",
+                loaded.ws.name,
+                environment.unwrap_or("shared"),
+                req.name
+            ),
+            "ok",
+            format!("version {}", row.version),
+        )
+        .await;
         Response::ok(secret_to_proto(&row, environment))
     }
 }
@@ -2008,6 +2134,7 @@ async fn execute(
         }
         PlanPayload::DeployService {
             workspace_id,
+            environment: _,
             service_id,
             unit,
             image,
@@ -2154,6 +2281,7 @@ async fn execute(
         }
         PlanPayload::DeleteService {
             workspace_id,
+            environment: _,
             service_id,
             unit,
             unit_files,
@@ -2190,22 +2318,29 @@ async fn execute(
 impl Plans for PlansSvc {
     async fn get(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, GetPlanRequest>,
     ) -> ServiceResult<Plan> {
         let id = parse_uuid(req.id, "plan")?;
+        let caller = self.state.require(&ctx, Need::read()).await?;
         match self.state.store.get_plan(id).await.map_err(internal)? {
-            Some(p) => Response::ok(plan_to_proto(&p)?),
+            Some(p) => {
+                if !p.workspace_id.is_nil() {
+                    auth::authorize(&caller, &Need::read().workspace(p.workspace_id))?;
+                }
+                Response::ok(plan_to_proto(&p)?)
+            }
             None => Err(not_found("plan", req.id)),
         }
     }
 
     async fn apply(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, ApplyPlanRequest>,
     ) -> ServiceResult<ServiceStream<ApplyEvent>> {
         let id = parse_uuid(req.plan_id, "plan")?;
+        let caller = self.state.require(&ctx, Need::apply()).await?;
         let Some(row) = self.state.store.get_plan(id).await.map_err(internal)? else {
             return Err(not_found("plan", req.plan_id));
         };
@@ -2243,6 +2378,40 @@ impl Plans for PlansSvc {
         }
         let stored: StoredChanges =
             serde_json::from_value(row.changes.clone()).map_err(internal)?;
+        // What applying this plan needs follows from what it does.
+        let need = match &stored.payload {
+            PlanPayload::CreateWorkspace { .. }
+            | PlanPayload::DeleteWorkspace { .. }
+            | PlanPayload::AddEnvironment { .. } => Need::apply().admin(),
+            PlanPayload::UpsertService { environment, .. }
+            | PlanPayload::DeployService { environment, .. }
+            | PlanPayload::DeleteService { environment, .. } => {
+                Need::apply().env_opt(CoreEnv::parse(environment))
+            }
+        };
+        let need = if row.workspace_id.is_nil() {
+            need
+        } else {
+            need.workspace(row.workspace_id)
+        };
+        if let Err(e) = auth::authorize(&caller, &need) {
+            auth::audit(
+                &self.state,
+                Some(&caller),
+                "plan.apply",
+                row.id.to_string(),
+                "denied",
+                e.to_string(),
+            )
+            .await;
+            return Err(e);
+        }
+        let summary = stored
+            .changes
+            .iter()
+            .map(|c| format!("{} {}", c.kind, c.target))
+            .collect::<Vec<_>>()
+            .join("; ");
 
         // Alpha executes synchronously and streams the recorded events; a live
         // channel replaces this once applies take more than a few seconds.
@@ -2254,9 +2423,27 @@ impl Plans for PlansSvc {
                     .mark_plan_applied(row.id)
                     .await
                     .map_err(internal)?;
+                auth::audit(
+                    &self.state,
+                    Some(&caller),
+                    "plan.apply",
+                    row.id.to_string(),
+                    "ok",
+                    summary,
+                )
+                .await;
             }
             Err(e) => {
                 tracing::error!(plan = %row.id, error = %e, "apply failed");
+                auth::audit(
+                    &self.state,
+                    Some(&caller),
+                    "plan.apply",
+                    row.id.to_string(),
+                    "failed",
+                    format!("{summary} :: {e}"),
+                )
+                .await;
                 events.push(event(0, apply_event::Status::STATUS_FAILED, e.to_string()));
             }
         }
@@ -2265,10 +2452,11 @@ impl Plans for PlansSvc {
 
     async fn discard(
         &self,
-        _ctx: RequestContext,
+        ctx: RequestContext,
         req: ServiceRequest<'_, DiscardPlanRequest>,
     ) -> ServiceResult<Empty> {
         let id = parse_uuid(req.id, "plan")?;
+        self.state.require(&ctx, Need::plan()).await?;
         if self
             .state
             .store

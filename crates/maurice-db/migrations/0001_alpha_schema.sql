@@ -121,13 +121,52 @@ create table deployments (
     finished_at   timestamptz
 );
 
+-- Who may call the panel (ADR-011). Passwords are argon2id PHC strings.
+create table users (
+    id            uuid primary key,
+    login         text not null unique check (login ~ '^[a-z0-9][a-z0-9._-]{0,62}$'),
+    password_hash text not null,
+    role          text not null check (role in ('admin', 'operator', 'viewer')),
+    disabled      boolean not null default false,
+    created_at    timestamptz not null default now()
+);
+
+-- Browser sessions: the cookie carries a random id, the table its sha256.
+create table sessions (
+    id            uuid primary key,
+    user_id       uuid not null references users(id) on delete cascade,
+    hash          bytea not null unique,
+    created_at    timestamptz not null default now(),
+    expires_at    timestamptz not null,
+    last_seen_at  timestamptz not null default now()
+);
+
+-- API tokens for the CLI, MCP and bots: the secret is shown once, the table keeps its sha256.
 create table tokens (
     id            uuid primary key,
-    owner         text not null,
+    user_id       uuid not null references users(id) on delete cascade,
+    name          text not null,
     hash          bytea not null unique,
     scopes        text[] not null check (scopes <@ array['read', 'plan', 'apply']),
     workspace_ids uuid[] not null default '{}',
+    -- Apply on prod and staging needs a human behind the token.
     human         boolean not null default true,
     created_at    timestamptz not null default now(),
-    expires_at    timestamptz
+    expires_at    timestamptz,
+    last_used_at  timestamptz,
+    revoked_at    timestamptz
 );
+
+-- One row per state-changing call: who did what, through which tier, and how it ended.
+create table audit (
+    id            uuid primary key,
+    at            timestamptz not null default now(),
+    user_id       uuid references users(id) on delete set null,
+    principal     text not null,
+    action        text not null,
+    target        text not null,
+    tier          text not null default '',
+    outcome       text not null check (outcome in ('ok', 'denied', 'failed')),
+    detail        text not null default ''
+);
+create index audit_at on audit (at desc);

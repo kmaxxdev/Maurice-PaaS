@@ -51,6 +51,15 @@ enum Command {
         #[arg(long, env = "MAURICE_PORT_RANGE")]
         port_range: Option<String>,
     },
+    /// Sign in to the panel and store a token for the other commands.
+    Login {
+        #[arg(long, short = 'u')]
+        user: Option<String>,
+    },
+    /// Forget the stored token.
+    Logout,
+    /// Show who the stored token belongs to.
+    Whoami,
     /// Workspaces (through the panel).
     Workspace {
         #[command(subcommand)]
@@ -145,6 +154,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Host { command } => {
             host::run(command, tier).await?;
         }
+        Command::Login { user } => {
+            ctl::auth(ctl::AuthCommand::Login { user }, &cli.server, tier).await?
+        }
+        Command::Logout => ctl::auth(ctl::AuthCommand::Logout, &cli.server, tier).await?,
+        Command::Whoami => ctl::auth(ctl::AuthCommand::Whoami, &cli.server, tier).await?,
         Command::Workspace { command } => ctl::workspace(command, &cli.server, tier).await?,
         Command::Plan { command } => ctl::plan(command, &cli.server, tier).await?,
         Command::Service { command } => ctl::service(command, &cli.server, tier).await?,
@@ -206,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Read `KEY=value` from a simple env file; quotes around the value are stripped.
-fn read_env_file_var(path: &str, key: &str) -> Option<String> {
+pub(crate) fn read_env_file_var(path: &str, key: &str) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     text.lines().find_map(|l| {
         let l = l.trim();

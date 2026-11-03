@@ -54,7 +54,7 @@ Two host facts learned on the way, both now handled by the agent:
 scripts/vm-run.sh host prepare      # AppArmor fix + system PostgreSQL (maurice-postgres.service)
 scripts/vm-run.sh tier              # also installs marik / maurice-odysseus-stella symlinks
 ssh dev@<ip> 'sudo systemd-run --unit maurice-dev --collect -p EnvironmentFile=/etc/maurice/maurice.env /usr/local/bin/maurice serve'
-ssh dev@<ip> 'marik workspace create shop --env dev --env prod && marik plan apply <id> && marik workspace list'
+ssh dev@<ip> 'marik login -u admin && marik workspace create shop --env dev --env prod && marik plan apply <id> && marik workspace list'
 ```
 
 Verified: create plan → apply creates `ws-shop` through the agent and stores the row; `marik` refuses

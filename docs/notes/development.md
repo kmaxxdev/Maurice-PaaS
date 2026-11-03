@@ -48,9 +48,13 @@ pnpm dev                                  # SPA on 5173, proxies /maurice.v1.* t
 cargo run -- render examples/shop.json    # print the units a workspace would produce
 ```
 
-Client commands talk to the panel (`--server`, default `http://127.0.0.1:7700`):
+Client commands talk to the panel (`--server`, default `http://127.0.0.1:7700`). Every call needs
+a signed-in user (ADR-011): `host prepare` creates `admin` and prints its password once;
+`maurice host password-reset <login>` prints a new one.
 
 ```
+marik login -u admin                      # asks for the password (or MAURICE_PASSWORD); stores a token
+marik whoami  /  marik logout             # token lives in ~/.config/maurice/token or MAURICE_TOKEN
 marik workspace create shop               # returns a plan; environments dev and prod, 500 host ports
 marik workspace create shop --env dev --env staging --env prod --block-size 1000
 marik workspace ports <ws>                # the block, what is bound in it, next free port
@@ -73,6 +77,12 @@ marik service deploy <svc-id>  &&  marik plan apply <plan-id>  # starts, waits f
 marik service unit <svc-id>  /  marik service logs <svc-id> [--follow]  /  marik service stats <svc-id>
 maurice service delete <svc-id>  &&  maurice plan apply <plan-id> --confirm
 ```
+
+Roles: `viewer` reads, `operator` plans everywhere and applies in `dev`, `admin` does everything
+including users, tokens and environments. Apply in `prod` and `staging` needs an admin behind a
+human token; tokens for bots are created with "human" off. Every state change writes an audit row
+(Settings page or `Auth.ListAudit`). The CLI sends its tier (`marik`, `maurice`, …) in the
+`Maurice-Tier` header so the audit log shows how a change was made.
 
 Service definitions are proto JSON (`examples/*.json`): `imageRef`, `ports[]`, `env[]` with
 `literal`, `ref` (`{{postgres.url}}`) or `secretName`. A service lives in one environment of its

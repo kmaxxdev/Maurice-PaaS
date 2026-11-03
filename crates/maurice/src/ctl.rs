@@ -6,6 +6,7 @@ use crate::tier::Tier;
 use clap::Subcommand;
 use connectrpc::client::{ClientConfig, HttpClient};
 use maurice_api::proto::maurice::v1::*;
+use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum WorkspaceCommand {
@@ -143,10 +144,128 @@ pub enum PlanCommand {
     Discard { id: String },
 }
 
+#[derive(Subcommand)]
+pub enum AuthCommand {
+    /// Sign in with a login and password; stores an API token for later calls.
+    Login {
+        /// Panel login; asked for when omitted.
+        #[arg(long, short = 'u')]
+        user: Option<String>,
+    },
+    /// Forget the stored token.
+    Logout,
+    /// Show who the stored token belongs to.
+    Whoami,
+}
+
 type Client = HttpClient;
 
-fn config(server: &str) -> anyhow::Result<ClientConfig> {
-    Ok(ClientConfig::new(server.parse()?))
+/// Where the CLI keeps its token: `$XDG_CONFIG_HOME/maurice/token` or `~/.config/maurice/token`.
+fn token_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("maurice").join("token"))
+}
+
+fn stored_token() -> Option<String> {
+    if let Ok(t) = std::env::var("MAURICE_TOKEN")
+        && !t.trim().is_empty()
+    {
+        return Some(t.trim().to_string());
+    }
+    let text = std::fs::read_to_string(token_path()?).ok()?;
+    let t = text.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+fn save_token(token: &str) -> anyhow::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = token_path().ok_or_else(|| anyhow::anyhow!("no HOME to store the token in"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&path, format!("{token}\n"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(path)
+}
+
+/// Client configuration: the stored token as a bearer and the tier for the audit log.
+fn config(server: &str, tier: Tier) -> anyhow::Result<ClientConfig> {
+    let mut headers = http::HeaderMap::new();
+    if let Some(t) = stored_token() {
+        headers.insert(http::header::AUTHORIZATION, format!("Bearer {t}").parse()?);
+    }
+    headers.insert(
+        http::HeaderName::from_static(maurice_api::auth::TIER_HEADER),
+        tier.to_string().parse()?,
+    );
+    Ok(ClientConfig::new(server.parse()?).with_default_headers(headers))
+}
+
+pub async fn auth(cmd: AuthCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = AuthClient::new(Client::plaintext(), config(server, tier)?);
+    match cmd {
+        AuthCommand::Login { user } => {
+            let login = match user {
+                Some(u) => u,
+                None => {
+                    eprint!("login: ");
+                    let mut l = String::new();
+                    std::io::stdin().read_line(&mut l)?;
+                    l.trim().to_string()
+                }
+            };
+            // Scripts pass the password in the environment; humans are prompted.
+            let password = match std::env::var("MAURICE_PASSWORD") {
+                Ok(p) if !p.is_empty() => p,
+                _ => rpassword::prompt_password("password: ")?,
+            };
+            let host = std::fs::read_to_string("/etc/hostname")
+                .map(|h| h.trim().to_string())
+                .unwrap_or_else(|_| "host".into());
+            let resp = client
+                .login(LoginRequest {
+                    login: login.clone(),
+                    password,
+                    create_token: true,
+                    token_name: format!("cli@{host}"),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            let path = save_token(&resp.token)?;
+            let role = resp
+                .user
+                .as_option()
+                .map(|u| format!("{:?}", u.role).to_lowercase().replace("role_", ""))
+                .unwrap_or_default();
+            println!(
+                "signed in as {login} ({role}); token stored in {}",
+                path.display()
+            );
+        }
+        AuthCommand::Logout => {
+            if let Some(p) = token_path()
+                && p.exists()
+            {
+                std::fs::remove_file(&p)?;
+                println!("token removed from {}", p.display());
+            } else {
+                println!("no stored token");
+            }
+        }
+        AuthCommand::Whoami => {
+            let u = client.me(MeRequest::default()).await?.into_owned();
+            println!(
+                "{} ({}){}",
+                u.login,
+                format!("{:?}", u.role).to_lowercase().replace("role_", ""),
+                if u.disabled { "  [disabled]" } else { "" }
+            );
+        }
+    }
+    Ok(())
 }
 
 fn parse_env(s: &str) -> anyhow::Result<Env> {
@@ -214,8 +333,8 @@ fn print_plan(p: &Plan) {
     }
 }
 
-pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
-    let client = WorkspacesClient::new(Client::plaintext(), config(server)?);
+pub async fn workspace(cmd: WorkspaceCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = WorkspacesClient::new(Client::plaintext(), config(server, tier)?);
     match cmd {
         WorkspaceCommand::List => {
             let resp = client
@@ -332,7 +451,7 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
 }
 
 pub async fn plan(cmd: PlanCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
-    let client = PlansClient::new(Client::plaintext(), config(server)?);
+    let client = PlansClient::new(Client::plaintext(), config(server, tier)?);
     match cmd {
         PlanCommand::Get { id } => {
             let p = client
@@ -396,8 +515,8 @@ pub async fn plan(cmd: PlanCommand, server: &str, tier: Tier) -> anyhow::Result<
     Ok(())
 }
 
-pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
-    let client = ServicesClient::new(Client::plaintext(), config(server)?);
+pub async fn service(cmd: ServiceCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = ServicesClient::new(Client::plaintext(), config(server, tier)?);
     match cmd {
         ServiceCommand::List { workspace, env } => {
             let environment = match env {
@@ -596,8 +715,8 @@ pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::
     Ok(())
 }
 
-pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
-    let client = SecretsClient::new(Client::plaintext(), config(server)?);
+pub async fn secret(cmd: SecretCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = SecretsClient::new(Client::plaintext(), config(server, tier)?);
     match cmd {
         SecretCommand::List { workspace } => {
             let resp = client
@@ -649,8 +768,8 @@ pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Re
     Ok(())
 }
 
-pub async fn project(cmd: ProjectCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
-    let client = ProjectsClient::new(Client::plaintext(), config(server)?);
+pub async fn project(cmd: ProjectCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = ProjectsClient::new(Client::plaintext(), config(server, tier)?);
     match cmd {
         ProjectCommand::List { workspace } => {
             let resp = client
