@@ -51,8 +51,9 @@ cargo run -- render examples/shop.json    # print the units a workspace would pr
 Client commands talk to the panel (`--server`, default `http://127.0.0.1:7700`):
 
 ```
-marik workspace create shop               # returns a plan; environments dev and prod by default
-marik workspace create shop --env dev --env staging --env prod
+marik workspace create shop               # returns a plan; environments dev and prod, 500 host ports
+marik workspace create shop --env dev --env staging --env prod --block-size 1000
+marik workspace ports <ws>                # the block, what is bound in it, next free port
 marik plan apply <plan-id>                # creates the user and the environment networks through the agent
 marik workspace add-env <ws> staging      # plan adding an environment later
 marik workspace list
@@ -77,8 +78,10 @@ Service definitions are proto JSON (`examples/*.json`): `imageRef`, `ports[]`, `
 `literal`, `ref` (`{{postgres.url}}`) or `secretName`. A service lives in one environment of its
 workspace (ADR-012): units are named `<env>-<service>.container`, the network is `<ws>-<env>`,
 references resolve inside the same environment, and a secret name resolves to the environment's
-secret first and a shared one second. Pre-1.0 the single migration may be edited in place; reset a
-dev database when it changes (`podman volume rm maurice-postgres-data` in the VM).
+secret first and a shared one second. Every published host port must lie inside the workspace's
+port block, carved from `MAURICE_PORT_RANGE` (default `20000-39999`, written by `host prepare`).
+Pre-1.0 the single migration may be edited in place; reset a dev database when it changes
+(`podman volume rm maurice-postgres-data` in the VM).
 
 In the VM: `scripts/vm-run.sh host prepare`, then start the panel as a transient unit and use the
 same commands over SSH (see `docs/notes/dev-vm.md`).

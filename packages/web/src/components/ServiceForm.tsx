@@ -3,13 +3,14 @@ import { create } from "@bufbuild/protobuf";
 import { ServiceSchema } from "../gen/maurice/v1/services_pb";
 import type { Service } from "../gen/maurice/v1/services_pb";
 import { ServiceKind } from "../gen/maurice/v1/common_pb";
+import type { WorkspacePorts } from "../gen/maurice/v1/workspaces_pb";
 
 /**
  * A plain form for the common case. Ports are one per line as
  * `container` or `container:hostPort` or `container:hostIp:hostPort`; env as
  * `KEY=value`, `KEY={{service.field}}` or `KEY=secret:name`.
  */
-export function ServiceForm(props: { initial?: Service; secretNames?: string[]; onSubmit: (s: Service) => void; submitLabel?: string }) {
+export function ServiceForm(props: { initial?: Service; secretNames?: string[]; ports?: WorkspacePorts; onSubmit: (s: Service) => void; submitLabel?: string }) {
   const init = props.initial;
   const [name, setName] = createSignal(init?.name ?? "");
   const [kind, setKind] = createSignal<"stateless" | "stateful">(init?.kind === ServiceKind.STATEFUL ? "stateful" : "stateless");
@@ -111,7 +112,10 @@ export function ServiceForm(props: { initial?: Service; secretNames?: string[]; 
       </div>
       <div class="grid" style={{ "grid-template-columns": "repeat(auto-fit, minmax(260px, 1fr))" }}>
         <label>
-          <span>Ports, one per line: <code>5432</code> internal, <code>80:18080</code> published on loopback, <code>80:0.0.0.0:8080</code> public</span>
+          <span>
+            Ports, one per line: <code>5432</code> internal, <code>80:{props.ports?.nextFree || 18080}</code> published on loopback, <code>80:0.0.0.0:{props.ports?.nextFree || 8080}</code> public
+            <Show when={props.ports}>{(p) => <> · host ports must be inside <code>{p().blockStart}–{p().blockStart + p().blockSize - 1}</code>{p().nextFree ? <>, next free <code>{p().nextFree}</code></> : ", block is full"}</>}</Show>
+          </span>
           <textarea id="sf-ports" class="mono" style={{ "min-height": "80px" }} value={ports()} onInput={(e) => setPorts(e.currentTarget.value)} />
         </label>
         <label>

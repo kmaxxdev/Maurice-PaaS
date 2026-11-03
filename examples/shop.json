@@ -6,6 +6,10 @@
   "subuid_len": 65536,
   "home": "/srv/ws/shop",
   "cpu_slice": null,
+  "port_block": {
+    "start": 13000,
+    "size": 100
+  },
   "environments": [
     {
       "env": "dev",

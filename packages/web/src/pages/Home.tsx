@@ -10,6 +10,7 @@ export function Home() {
   const [list, { refetch }] = createResource(async () => (await workspaces.list({})).workspaces);
   const [name, setName] = createSignal("");
   const [envs, setEnvs] = createSignal<Env[]>([Env.DEV, Env.PROD]);
+  const [blockSize, setBlockSize] = createSignal(500);
   const toggleEnv = (e: Env, on: boolean) => setEnvs((cur) => (on ? ENV_ORDER.filter((x) => x === e || cur.includes(x)) : cur.filter((x) => x !== e)));
   const [plan, setPlan] = createSignal<Plan | null>(null);
   const [error, setError] = createSignal("");
@@ -19,7 +20,7 @@ export function Home() {
     setError("");
     try {
       if (!envs().length) throw new Error("pick at least one environment");
-      setPlan(await workspaces.planCreate({ name: name(), environments: envs() }));
+      setPlan(await workspaces.planCreate({ name: name(), environments: envs(), portBlockSize: blockSize() }));
     } catch (err) {
       setError(errorText(err));
     }
@@ -43,8 +44,9 @@ export function Home() {
                       <For each={ws.environments}>{(e) => <span class={`pill ${envTone(e)}`}>{envLabel(e)}</span>}</For>
                     </div>
                     <div class="muted small mono" style={{ "margin-top": "6px" }}>
-                      {ws.unixUser} · uid {ws.uid} · subuid {ws.subuidStart}+{ws.subuidLen}
+                      {ws.unixUser} · uid {ws.uid} · ports {ws.portBlockStart}–{ws.portBlockStart + ws.portBlockSize - 1}
                     </div>
+                    <div class="muted small mono">subuid {ws.subuidStart}+{ws.subuidLen}</div>
                     <div class="muted small mono">{ws.home}</div>
                   </A>
                 )}
@@ -71,13 +73,21 @@ export function Home() {
               )}
             </For>
           </fieldset>
+          <label>
+            Host ports
+            <select id="ws-ports" value={String(blockSize())} onChange={(e) => setBlockSize(Number(e.currentTarget.value))}>
+              <option value="100">100</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+            </select>
+          </label>
           <button class="primary" type="submit">Plan</button>
           <Show when={error()}>
             <span class="error small">{error()}</span>
           </Show>
         </form>
         <p class="muted small" style={{ margin: "8px 0 0" }}>
-          Creates the system user <code>ws-&lt;name&gt;</code> with its own subuid range and home, and one network per environment. Environments can be added later. Nothing happens until you apply the plan.
+          Creates the system user <code>ws-&lt;name&gt;</code> with its own subuid range and home, one network per environment and a contiguous block of host ports that every published port must fall into. Environments can be added later. Nothing happens until you apply the plan.
         </p>
       </div>
       <PlanDialog plan={plan()} onClose={() => setPlan(null)} onApplied={() => { setName(""); refetch(); }} />

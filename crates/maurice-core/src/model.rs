@@ -53,8 +53,38 @@ pub enum ServiceKind {
     Stateful,
 }
 
+/// Contiguous range of host ports a workspace may bind (ADR-012). Every host
+/// binding of the workspace lives inside it, so workspaces cannot collide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PortBlock {
+    pub start: u16,
+    pub size: u16,
+}
+
+impl PortBlock {
+    /// Block sizes a workspace may be created with.
+    pub const SIZES: [u16; 3] = [100, 500, 1000];
+    pub const DEFAULT_SIZE: u16 = 500;
+
+    /// Last port of the block, inclusive.
+    pub fn end(&self) -> u16 {
+        self.start + self.size - 1
+    }
+
+    pub fn contains(&self, port: u16) -> bool {
+        port >= self.start && port <= self.end()
+    }
+}
+
+impl std::fmt::Display for PortBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.start, self.end())
+    }
+}
+
 /// A workspace is a system user with its own rootless Podman and home. It owns
-/// one or more environments, each with a network of its own (ADR-012).
+/// one or more environments, each with a network of its own, and a block of
+/// host ports (ADR-012).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
@@ -64,6 +94,7 @@ pub struct Workspace {
     pub subuid_len: u32,
     pub home: String,
     pub cpu_slice: Option<String>,
+    pub port_block: PortBlock,
     pub environments: Vec<Environment>,
 }
 

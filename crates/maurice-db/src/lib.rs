@@ -31,6 +31,8 @@ pub struct WorkspaceRow {
     pub subuid_len: i32,
     pub home: String,
     pub cpu_slice: Option<String>,
+    pub port_block_start: i32,
+    pub port_block_size: i32,
     pub created_at: OffsetDateTime,
 }
 
@@ -100,8 +102,8 @@ impl Store {
 
     pub async fn insert_workspace(&self, w: &WorkspaceRow) -> anyhow::Result<()> {
         sqlx::query(
-            "insert into workspaces (id, name, unix_user, uid, subuid_start, subuid_len, home, cpu_slice, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "insert into workspaces (id, name, unix_user, uid, subuid_start, subuid_len, home, cpu_slice, port_block_start, port_block_size, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(w.id)
         .bind(&w.name)
@@ -111,10 +113,21 @@ impl Store {
         .bind(w.subuid_len)
         .bind(&w.home)
         .bind(&w.cpu_slice)
+        .bind(w.port_block_start)
+        .bind(w.port_block_size)
         .bind(w.created_at)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Port blocks held by existing workspaces as `(start, size)`.
+    pub async fn list_port_blocks(&self) -> anyhow::Result<Vec<(i32, i32)>> {
+        Ok(sqlx::query_as::<_, (i32, i32)>(
+            "select port_block_start, port_block_size from workspaces order by port_block_start",
+        )
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     // --- environments ---
@@ -649,5 +662,54 @@ impl Store {
         .bind(service_id)
         .fetch_optional(&self.pool)
         .await?)
+    }
+}
+
+/// First free port block of `size` inside `range` (inclusive bounds), given the
+/// blocks already held. Blocks start at a multiple of their size, so a 500-block
+/// reads as 21000-21499 and never straddles another block.
+pub fn next_port_block(held: &[(i32, i32)], range: (i32, i32), size: i32) -> Option<i32> {
+    let mut held: Vec<(i32, i32)> = held.to_vec();
+    held.sort_unstable();
+    let align = |p: i32| ((p + size - 1) / size) * size;
+    let mut candidate = align(range.0);
+    for (start, len) in held {
+        if candidate + size <= start {
+            break;
+        }
+        if candidate < start + len {
+            candidate = align(start + len);
+        }
+    }
+    (candidate + size - 1 <= range.1).then_some(candidate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_port_block;
+
+    #[test]
+    fn blocks_are_aligned_and_do_not_overlap() {
+        let range = (20000, 39999);
+        assert_eq!(next_port_block(&[], range, 500), Some(20000));
+        assert_eq!(next_port_block(&[(20000, 500)], range, 500), Some(20500));
+        // A 1000-block after two 500-blocks starts at the next multiple of 1000.
+        assert_eq!(
+            next_port_block(&[(20000, 500), (20500, 500)], range, 1000),
+            Some(21000)
+        );
+        // Gaps are reused: the 100-block fits before the 1000-block.
+        assert_eq!(
+            next_port_block(&[(20000, 500), (21000, 1000)], range, 100),
+            Some(20500)
+        );
+        // An unaligned held block still pushes the candidate past it.
+        assert_eq!(next_port_block(&[(20100, 100)], range, 500), Some(20500));
+    }
+
+    #[test]
+    fn exhausted_range_yields_none() {
+        assert_eq!(next_port_block(&[(20000, 500)], (20000, 20499), 100), None);
+        assert_eq!(next_port_block(&[], (20000, 20099), 500), None);
     }
 }

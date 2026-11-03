@@ -67,7 +67,7 @@ does that, so the installer only starts them.
 Verified end to end on the VM: secret set → service upsert (plan shows the full unit as a diff) →
 apply writes `postgres.container`, the volume and the network unit → deploy plan starts the unit and
 blocks until healthy (~40 s) → `service logs` reads the user journal → a second service resolves
-`{{postgres.url}}` and publishes `127.0.0.1:18080`, `curl` answers 200 → re-upsert without changes
+`{{postgres.url}}` and publishes `127.0.0.1:20080`, `curl` answers 200 → re-upsert without changes
 plans nothing → `marik` refuses the destructive delete, `maurice --confirm` applies it → deleting the
 workspace with a running service and secret-backed env leaves no user, subuid, home or container.
 

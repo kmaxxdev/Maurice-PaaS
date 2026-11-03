@@ -311,6 +311,13 @@ fn default_data_dir(image: Option<&str>) -> String {
     }
 }
 
+pub fn port_block_of(w: &WorkspaceRow) -> maurice_core::PortBlock {
+    maurice_core::PortBlock {
+        start: w.port_block_start as u16,
+        size: w.port_block_size as u16,
+    }
+}
+
 /// Rows → domain model of the whole workspace. Projects are workspace-wide; inside
 /// the model each environment lists the projects with its own services.
 pub fn workspace_to_core(
@@ -328,6 +335,7 @@ pub fn workspace_to_core(
         subuid_len: w.subuid_len as u32,
         home: w.home.clone(),
         cpu_slice: w.cpu_slice.clone(),
+        port_block: port_block_of(w),
         environments: environments
             .iter()
             .filter_map(|e| {

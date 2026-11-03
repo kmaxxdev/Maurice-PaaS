@@ -46,6 +46,10 @@ enum Command {
         /// Record host operations instead of performing them (no root needed).
         #[arg(long)]
         dry_run: bool,
+        /// Host ports workspace blocks are carved from, e.g. 20000-39999. Defaults to
+        /// MAURICE_PORT_RANGE from the environment or /etc/maurice/maurice.env.
+        #[arg(long, env = "MAURICE_PORT_RANGE")]
+        port_range: Option<String>,
     },
     /// Workspaces (through the panel).
     Workspace {
@@ -150,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
             listen,
             database_url,
             dry_run,
+            port_range,
         } => {
             tier.require_at_least(Tier::Maurice)?;
             let database_url = match database_url {
@@ -179,11 +184,18 @@ async fn main() -> anyhow::Result<()> {
                 maurice_agent::HostAgent::check_privileges()?;
                 Arc::new(maurice_agent::HostAgent::new())
             };
-            let state = Arc::new(maurice_api::services::State::new(
-                agent,
-                maurice_db::Store::new(pool),
-                master_key,
-            ));
+            let mut state =
+                maurice_api::services::State::new(agent, maurice_db::Store::new(pool), master_key);
+            if let Some(range) = port_range
+                .or_else(|| read_env_file_var("/etc/maurice/maurice.env", "MAURICE_PORT_RANGE"))
+            {
+                state.port_range = maurice_api::services::parse_port_range(&range)?;
+            }
+            tracing::info!(
+                range = format!("{}-{}", state.port_range.0, state.port_range.1),
+                "workspace port blocks"
+            );
+            let state = Arc::new(state);
             let app = maurice_api::app(state);
             let listener = tokio::net::TcpListener::bind(&listen).await?;
             tracing::info!(%listen, %tier, "maurice serving");

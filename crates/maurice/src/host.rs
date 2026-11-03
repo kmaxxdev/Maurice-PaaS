@@ -262,6 +262,10 @@ async fn selftest(
             subuid_len: 65536,
             home: home.clone(),
             cpu_slice: None,
+            port_block: maurice_core::PortBlock {
+                start: 39000,
+                size: 100,
+            },
             environments: vec![maurice_core::Environment {
                 env: maurice_core::Env::Dev,
                 projects: vec![maurice_core::Project {
@@ -402,6 +406,7 @@ async fn prepare_host() -> anyhow::Result<()> {
     }
     install_panel_postgres().await?;
     ensure_master_key()?;
+    ensure_port_range()?;
     configure_journald().await?;
     install_panel_unit().await?;
     println!("host prepared");
@@ -532,6 +537,19 @@ fn random_token(len: usize) -> String {
     buf.iter()
         .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
         .collect()
+}
+
+/// Append `MAURICE_PORT_RANGE` to the env file if it is missing: the host port range
+/// workspace blocks are carved from (ADR-012).
+fn ensure_port_range() -> anyhow::Result<()> {
+    let env_path = "/etc/maurice/maurice.env";
+    let text = std::fs::read_to_string(env_path).unwrap_or_default();
+    if text.lines().any(|l| l.starts_with("MAURICE_PORT_RANGE=")) {
+        return Ok(());
+    }
+    std::fs::write(env_path, format!("{text}MAURICE_PORT_RANGE=20000-39999\n"))?;
+    println!("ports: workspace blocks come from 20000-39999 (MAURICE_PORT_RANGE in {env_path})");
+    Ok(())
 }
 
 /// Append `MAURICE_MASTER_KEY` to the env file if it is missing. Losing this key
