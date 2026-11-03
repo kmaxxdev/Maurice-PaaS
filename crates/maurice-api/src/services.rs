@@ -4,13 +4,15 @@
 
 use crate::crypto::MasterKey;
 use crate::model_map;
+use crate::model_map::{env_from_proto, env_to_proto, podman_secret_name};
 use crate::proto::maurice::v1::*;
 use connectrpc::{
     ConnectError, ErrorCode, RequestContext, Response, ServiceRequest, ServiceResult, ServiceStream,
 };
 use futures::StreamExt;
 use maurice_agent::{Agent, NewUser, UserRef};
-use maurice_db::{DeploymentRow, PlanRow, Store, WorkspaceRow};
+use maurice_core::Env as CoreEnv;
+use maurice_db::{DeploymentRow, EnvironmentRow, PlanRow, Store, WorkspaceRow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -43,11 +45,17 @@ impl State {
 pub enum PlanPayload {
     CreateWorkspace {
         name: String,
-        env: String,
+        /// Environments to create with the workspace, by name.
+        environments: Vec<String>,
         unix_user: String,
         home: String,
         subuid_start: i64,
         subuid_len: i32,
+    },
+    /// Add an environment and its network to an existing workspace.
+    AddEnvironment {
+        workspace_id: Uuid,
+        environment: String,
     },
     DeleteWorkspace {
         workspace_id: Uuid,
@@ -58,6 +66,8 @@ pub enum PlanPayload {
     /// Write rows and units; does not start anything.
     UpsertService {
         workspace_id: Uuid,
+        environment_id: Uuid,
+        environment: String,
         project_id: Uuid,
         project_name: String,
         service: maurice_db::ServiceRow,
@@ -94,7 +104,8 @@ pub struct StoredBuild {
     pub context: String,
     /// Image name without tag.
     pub image: String,
-    pub service_name: String,
+    /// Scratch checkout name, unique per environment and service.
+    pub checkout: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,23 +169,15 @@ fn parse_uuid(s: &str, what: &str) -> Result<Uuid, ConnectError> {
     Uuid::parse_str(s).map_err(|_| invalid(format!("{what} id must be a uuid")))
 }
 
-fn env_to_str(e: buffa::EnumValue<Env>) -> Result<&'static str, ConnectError> {
-    match e.as_known() {
-        Some(Env::ENV_PROD) => Ok("prod"),
-        Some(Env::ENV_DEV) => Ok("dev"),
-        _ => Err(invalid("env must be ENV_PROD or ENV_DEV")),
-    }
+fn env_required(e: buffa::EnumValue<Env>) -> Result<&'static str, ConnectError> {
+    env_from_proto(e).ok_or_else(|| invalid("environment must be ENV_DEV, ENV_STAGING or ENV_PROD"))
 }
 
-fn env_from_str(s: &str) -> Env {
-    match s {
-        "prod" => Env::ENV_PROD,
-        "dev" => Env::ENV_DEV,
-        _ => Env::ENV_UNSPECIFIED,
-    }
+fn core_env(name: &str) -> Result<CoreEnv, ConnectError> {
+    CoreEnv::parse(name).ok_or_else(|| internal(format!("unknown environment '{name}'")))
 }
 
-fn workspace_to_proto(w: &WorkspaceRow) -> Workspace {
+fn workspace_to_proto(w: &WorkspaceRow, environments: &[EnvironmentRow]) -> Workspace {
     Workspace {
         id: w.id.to_string(),
         name: w.name.clone(),
@@ -183,7 +186,10 @@ fn workspace_to_proto(w: &WorkspaceRow) -> Workspace {
         subuid_start: w.subuid_start as u32,
         subuid_len: w.subuid_len as u32,
         home: w.home.clone(),
-        env: env_from_str(&w.env).into(),
+        environments: environments
+            .iter()
+            .map(|e| env_to_proto(&e.name).into())
+            .collect(),
         cpu_slice: w.cpu_slice.clone().unwrap_or_default(),
         ..Default::default()
     }
@@ -306,26 +312,65 @@ fn unit_diff(old: Option<&str>, new: &str) -> String {
     out.join("\n")
 }
 
+/// A secret as the handlers see it: its scope (environment name, `None` = shared) and name.
+#[derive(Debug, Clone)]
+struct SecretRef {
+    environment: Option<String>,
+    name: String,
+}
+
 /// Everything the handlers need about one workspace, loaded in one go.
 struct Loaded {
     ws: WorkspaceRow,
     user: UserRef,
+    environments: Vec<EnvironmentRow>,
     projects: Vec<maurice_db::ProjectRow>,
     services: Vec<maurice_db::ServiceFull>,
-    secret_names: HashMap<Uuid, String>,
-    secret_ids: HashMap<String, Uuid>,
+    /// Every secret id referenced anywhere → scope and name.
+    secret_refs: HashMap<Uuid, SecretRef>,
+    /// Latest version of each secret by (environment id, name); `None` = shared.
+    secret_ids: HashMap<(Option<Uuid>, String), Uuid>,
 }
 
 impl Loaded {
+    fn environment(&self, name: &str) -> Option<&EnvironmentRow> {
+        self.environments.iter().find(|e| e.name == name)
+    }
+    fn environment_name(&self, id: Uuid) -> Option<&str> {
+        self.environments
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| e.name.as_str())
+    }
+    /// Plain secret name, for display.
     fn secret_name(&self) -> impl Fn(Uuid) -> Option<String> + '_ {
-        move |id| self.secret_names.get(&id).cloned()
+        move |id| self.secret_refs.get(&id).map(|r| r.name.clone())
+    }
+    /// Podman secret name, for units.
+    fn secret_podman_name(&self) -> impl Fn(Uuid) -> Option<String> + '_ {
+        move |id| {
+            self.secret_refs
+                .get(&id)
+                .map(|r| podman_secret_name(r.environment.as_deref(), &r.name))
+        }
+    }
+    /// Resolve a secret name from inside an environment: that environment first, then shared.
+    fn secret_id(&self, environment_id: Uuid, name: &str) -> Option<Uuid> {
+        self.secret_ids
+            .get(&(Some(environment_id), name.to_string()))
+            .or_else(|| self.secret_ids.get(&(None, name.to_string())))
+            .copied()
+    }
+    fn shared_secret_id(&self, name: &str) -> Option<Uuid> {
+        self.secret_ids.get(&(None, name.to_string())).copied()
     }
     fn core(&self) -> maurice_core::Workspace {
         model_map::workspace_to_core(
             &self.ws,
+            &self.environments,
             &self.projects,
             &self.services,
-            &self.secret_name(),
+            &self.secret_podman_name(),
         )
     }
 }
@@ -339,23 +384,44 @@ async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError>
     else {
         return Err(not_found("workspace", &workspace_id.to_string()));
     };
+    let environments = state
+        .store
+        .list_environments(ws.id)
+        .await
+        .map_err(internal)?;
     let projects = state.store.list_projects(ws.id).await.map_err(internal)?;
     let services = state.store.list_services(ws.id).await.map_err(internal)?;
     let secrets = state.store.list_secrets(ws.id).await.map_err(internal)?;
-    let mut secret_names = HashMap::new();
+    let env_name = |id: Option<Uuid>| {
+        id.and_then(|id| environments.iter().find(|e| e.id == id))
+            .map(|e| e.name.clone())
+    };
+    let mut secret_refs = HashMap::new();
     let mut secret_ids = HashMap::new();
     for s in &secrets {
-        secret_names.insert(s.id, s.name.clone());
-        secret_ids.insert(s.name.clone(), s.id);
+        secret_refs.insert(
+            s.id,
+            SecretRef {
+                environment: env_name(s.environment_id),
+                name: s.name.clone(),
+            },
+        );
+        secret_ids.insert((s.environment_id, s.name.clone()), s.id);
     }
     // Env rows may point at older versions of a secret; map those ids too.
     for svc in &services {
         for e in &svc.env {
             if let Some(sid) = e.secret_id
-                && !secret_names.contains_key(&sid)
+                && !secret_refs.contains_key(&sid)
                 && let Some(row) = state.store.get_secret(sid).await.map_err(internal)?
             {
-                secret_names.insert(sid, row.name);
+                secret_refs.insert(
+                    sid,
+                    SecretRef {
+                        environment: env_name(row.environment_id),
+                        name: row.name,
+                    },
+                );
             }
         }
     }
@@ -366,9 +432,10 @@ async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError>
     Ok(Loaded {
         ws,
         user,
+        environments,
         projects,
         services,
-        secret_names,
+        secret_refs,
         secret_ids,
     })
 }
@@ -376,13 +443,14 @@ async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError>
 /// Render every unit of a service against the full workspace model.
 fn render_units(
     ws: &maurice_core::Workspace,
+    env: CoreEnv,
     svc: &maurice_core::Service,
     image: &str,
     version: &str,
     enabled: bool,
 ) -> Result<Vec<UnitText>, ConnectError> {
     let mut units = Vec::new();
-    for v in maurice_quadlet::render_volumes(svc) {
+    for v in maurice_quadlet::render_volumes(env, svc) {
         units.push(UnitText {
             file_name: v.file_name,
             content: v.content,
@@ -390,10 +458,11 @@ fn render_units(
     }
     let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
         workspace: ws,
+        env,
         service: svc,
         image,
         version,
-        resolve_ref: &|r| resolve_ref(ws, r),
+        resolve_ref: &|r| resolve_ref(ws, env, r),
         enabled,
     })
     .map_err(|e| invalid(e.to_string()))?;
@@ -404,10 +473,14 @@ fn render_units(
     Ok(units)
 }
 
-/// `{{svc.host}}`, `{{svc.port}}`, and `{{svc.url}}` for well-known images.
-fn resolve_ref(ws: &maurice_core::Workspace, r: &str) -> Option<String> {
+/// `{{svc.host}}`, `{{svc.port}}`, and `{{svc.url}}` for well-known images, resolved
+/// inside one environment.
+fn resolve_ref(ws: &maurice_core::Workspace, env: CoreEnv, r: &str) -> Option<String> {
     let (svc_name, field) = maurice_core::validate::parse_ref(r)?;
-    let svc = ws.services().find(|s| s.name == svc_name)?;
+    let svc = ws
+        .environment(env)?
+        .services()
+        .find(|s| s.name == svc_name)?;
     let port = svc.ports.first().map(|p| p.container_port);
     match field {
         "host" => Some(svc.name.clone()),
@@ -436,13 +509,23 @@ fn resolve_ref(ws: &maurice_core::Workspace, r: &str) -> Option<String> {
     }
 }
 
-fn image_of(svc: &maurice_core::Service, ws_name: &str) -> String {
+/// Image a service runs: its reference, or a placeholder tag for build sources that
+/// the first deploy replaces with the built image.
+fn image_of(svc: &maurice_core::Service, ws_name: &str, env: CoreEnv) -> String {
     match &svc.source {
         maurice_core::Source::Image { reference } => reference.clone(),
-        maurice_core::Source::Build { .. } => format!("localhost/{ws_name}/{}:dev", svc.name),
+        maurice_core::Source::Build { .. } => {
+            format!("{}:pending", build_image_name(ws_name, env, &svc.name))
+        }
     }
 }
 
+/// Image name (without tag) for a service built from a Dockerfile.
+fn build_image_name(ws_name: &str, env: CoreEnv, service: &str) -> String {
+    format!("localhost/{ws_name}/{env}/{service}")
+}
+
+/// Workspace without its services: enough to render network units.
 fn core_workspace_shell(ws: &WorkspaceRow) -> maurice_core::Workspace {
     maurice_core::Workspace {
         name: ws.name.clone(),
@@ -451,14 +534,26 @@ fn core_workspace_shell(ws: &WorkspaceRow) -> maurice_core::Workspace {
         subuid_start: ws.subuid_start as u32,
         subuid_len: ws.subuid_len as u32,
         home: ws.home.clone(),
-        env: if ws.env == "prod" {
-            maurice_core::Env::Prod
-        } else {
-            maurice_core::Env::Dev
-        },
         cpu_slice: ws.cpu_slice.clone(),
-        projects: vec![],
+        environments: vec![],
     }
+}
+
+/// Parse and de-duplicate requested environments; empty means dev and prod.
+fn requested_environments(envs: &[buffa::EnumValue<Env>]) -> Result<Vec<CoreEnv>, ConnectError> {
+    if envs.is_empty() {
+        return Ok(vec![CoreEnv::Dev, CoreEnv::Prod]);
+    }
+    let mut out: Vec<CoreEnv> = Vec::new();
+    for e in envs {
+        let name = env_required(*e)?;
+        let env = core_env(name)?;
+        if !out.contains(&env) {
+            out.push(env);
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Health checks for well-known images so `Notify=healthy` works out of the box.
@@ -489,8 +584,18 @@ impl Workspaces for WorkspacesSvc {
         _req: ServiceRequest<'_, ListWorkspacesRequest>,
     ) -> ServiceResult<ListWorkspacesResponse> {
         let rows = self.state.store.list_workspaces().await.map_err(internal)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for w in &rows {
+            let envs = self
+                .state
+                .store
+                .list_environments(w.id)
+                .await
+                .map_err(internal)?;
+            out.push(workspace_to_proto(w, &envs));
+        }
         Response::ok(ListWorkspacesResponse {
-            workspaces: rows.iter().map(workspace_to_proto).collect(),
+            workspaces: out,
             ..Default::default()
         })
     }
@@ -502,9 +607,52 @@ impl Workspaces for WorkspacesSvc {
     ) -> ServiceResult<Workspace> {
         let id = parse_uuid(req.id, "workspace")?;
         match self.state.store.get_workspace(id).await.map_err(internal)? {
-            Some(w) => Response::ok(workspace_to_proto(&w)),
+            Some(w) => {
+                let envs = self
+                    .state
+                    .store
+                    .list_environments(w.id)
+                    .await
+                    .map_err(internal)?;
+                Response::ok(workspace_to_proto(&w, &envs))
+            }
             None => Err(not_found("workspace", req.id)),
         }
+    }
+
+    async fn plan_add_environment(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, PlanAddEnvironmentRequest>,
+    ) -> ServiceResult<Plan> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        let name = env_required(req.environment)?;
+        let env = core_env(name)?;
+        let mut findings = Vec::new();
+        if loaded.environment(name).is_some() {
+            findings.push(StoredFinding {
+                severity: "error".into(),
+                code: "environment.exists".into(),
+                message: format!(
+                    "workspace '{}' already has a {name} environment",
+                    loaded.ws.name
+                ),
+                target: format!("environment:{name}"),
+            });
+        }
+        let net = maurice_quadlet::render_network(&core_workspace_shell(&loaded.ws), env);
+        let changes = vec![StoredChange {
+            kind: "write_unit".into(),
+            target: format!("{}/{}", loaded.ws.unix_user, net.file_name),
+            diff: unit_diff(None, &net.content),
+            destructive: false,
+        }];
+        let payload = PlanPayload::AddEnvironment {
+            workspace_id: wid,
+            environment: name.into(),
+        };
+        Response::ok(store_plan(&self.state, wid, payload, changes, findings).await?)
     }
 
     async fn plan_create(
@@ -513,7 +661,7 @@ impl Workspaces for WorkspacesSvc {
         req: ServiceRequest<'_, PlanCreateWorkspaceRequest>,
     ) -> ServiceResult<Plan> {
         let name = req.name.to_string();
-        let env = env_to_str(req.env)?;
+        let environments = requested_environments(&req.environments)?;
         let mut findings = Vec::new();
         if !maurice_core::validate::is_dns_label(&name) || name.len() > 28 {
             findings.push(StoredFinding {
@@ -549,7 +697,7 @@ impl Workspaces for WorkspacesSvc {
             .map_err(internal)?;
         let unix_user = format!("ws-{name}");
         let home = format!("{}/{name}", self.state.home_root);
-        let changes = vec![StoredChange {
+        let mut changes = vec![StoredChange {
             kind: "create_user".into(),
             target: format!(
                 "{unix_user} (uid auto, subuid {subuid_start}+{subuid_len}, home {home})"
@@ -557,9 +705,28 @@ impl Workspaces for WorkspacesSvc {
             diff: String::new(),
             destructive: false,
         }];
+        let shell = maurice_core::Workspace {
+            name: name.clone(),
+            unix_user: unix_user.clone(),
+            uid: 0,
+            subuid_start: subuid_start as u32,
+            subuid_len: subuid_len as u32,
+            home: home.clone(),
+            cpu_slice: None,
+            environments: vec![],
+        };
+        for env in &environments {
+            let net = maurice_quadlet::render_network(&shell, *env);
+            changes.push(StoredChange {
+                kind: "write_unit".into(),
+                target: format!("{unix_user}/{}", net.file_name),
+                diff: unit_diff(None, &net.content),
+                destructive: false,
+            });
+        }
         let payload = PlanPayload::CreateWorkspace {
             name,
-            env: env.into(),
+            environments: environments.iter().map(|e| e.to_string()).collect(),
             unix_user,
             home,
             subuid_start,
@@ -609,17 +776,35 @@ pub struct ServicesSvc {
     pub state: Arc<State>,
 }
 
+/// A service row with the names the handlers address it by on the host.
+struct Target {
+    full: maurice_db::ServiceFull,
+    env: CoreEnv,
+    /// `prod-web`
+    stem: String,
+    /// `prod-web.service`
+    unit: String,
+}
+
 impl ServicesSvc {
-    async fn service_and_workspace(
-        &self,
-        id: &str,
-    ) -> Result<(maurice_db::ServiceFull, Loaded), ConnectError> {
+    async fn service_and_workspace(&self, id: &str) -> Result<(Target, Loaded), ConnectError> {
         let sid = parse_uuid(id, "service")?;
         let Some(full) = self.state.store.get_service(sid).await.map_err(internal)? else {
             return Err(not_found("service", id));
         };
         let loaded = load(&self.state, full.project.workspace_id).await?;
-        Ok((full, loaded))
+        let env = core_env(&full.environment)?;
+        let stem = maurice_quadlet::unit_stem(env, &full.service.name);
+        let unit = format!("{stem}.service");
+        Ok((
+            Target {
+                full,
+                env,
+                stem,
+                unit,
+            },
+            loaded,
+        ))
     }
 }
 
@@ -630,22 +815,21 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, GetStatusRequest>,
     ) -> ServiceResult<ServiceStatus> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
-        let unit = format!("{}.service", full.service.name);
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
         let st = self
             .state
             .agent
-            .unit_status(&loaded.user, &unit)
+            .unit_status(&loaded.user, &t.unit)
             .await
             .map_err(internal)?;
         let dep = self
             .state
             .store
-            .latest_deployment(full.service.id)
+            .latest_deployment(t.full.service.id)
             .await
             .map_err(internal)?;
         Response::ok(ServiceStatus {
-            service_id: full.service.id.to_string(),
+            service_id: t.full.service.id.to_string(),
             active_state: st.active_state,
             sub_state: st.sub_state,
             since: match st.since_unix {
@@ -671,10 +855,12 @@ impl Services for ServicesSvc {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
         let loaded = load(&self.state, wid).await?;
         let name = loaded.secret_name();
+        let only = env_from_proto(req.environment);
         Response::ok(ListServicesResponse {
             services: loaded
                 .services
                 .iter()
+                .filter(|s| only.is_none_or(|e| s.environment == e))
                 .map(|s| model_map::service_to_proto(s, &name))
                 .collect(),
             ..Default::default()
@@ -686,8 +872,8 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, GetServiceRequest>,
     ) -> ServiceResult<Service> {
-        let (full, loaded) = self.service_and_workspace(req.id).await?;
-        Response::ok(model_map::service_to_proto(&full, &loaded.secret_name()))
+        let (t, loaded) = self.service_and_workspace(req.id).await?;
+        Response::ok(model_map::service_to_proto(&t.full, &loaded.secret_name()))
     }
 
     async fn get_unit(
@@ -695,8 +881,8 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, GetUnitRequest>,
     ) -> ServiceResult<UnitFile> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
-        let file_name = format!("{}.container", full.service.name);
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        let file_name = format!("{}.container", t.stem);
         let content = self
             .state
             .agent
@@ -707,7 +893,7 @@ impl Services for ServicesSvc {
         let deployment_id = self
             .state
             .store
-            .latest_deployment(full.service.id)
+            .latest_deployment(t.full.service.id)
             .await
             .map_err(internal)?
             .map(|d| d.id.to_string())
@@ -725,8 +911,8 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, LogsRequest>,
     ) -> ServiceResult<ServiceStream<LogLine>> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
-        let unit = format!("{}.service", full.service.name);
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        let unit = t.unit;
         let tail = if req.tail == 0 { 200 } else { req.tail };
         let since = Some(loaded.ws.created_at.unix_timestamp() as u64);
         let agent = self.state.agent.clone();
@@ -789,10 +975,10 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, StatsRequest>,
     ) -> ServiceResult<ServiceStream<StatsSample>> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
         let agent = self.state.agent.clone();
         let user = loaded.user.clone();
-        let name = full.service.name.clone();
+        let name = t.stem;
         // One sample every two seconds until the client disconnects.
         // CPU is derived from consecutive cpu_time samples: podman's one-shot percentage is
         // averaged since the container started and would draw a flat line.
@@ -864,8 +1050,44 @@ impl Services for ServicesSvc {
         if !maurice_core::validate::is_dns_label(&project_name) {
             return Err(invalid("project must be a DNS label"));
         }
-        // An existing service with this name keeps its id so the upsert replaces it.
-        let existing = loaded.services.iter().find(|s| s.service.name == svc.name);
+        // Environment: the request, the definition, or the one an existing service of
+        // this name lives in when that is unambiguous.
+        let env_name = match env_from_proto(req.environment).or(env_from_proto(svc.environment)) {
+            Some(e) => e.to_string(),
+            None => {
+                let mut homes: Vec<&str> = loaded
+                    .services
+                    .iter()
+                    .filter(|s| s.service.name == svc.name)
+                    .map(|s| s.environment.as_str())
+                    .collect();
+                homes.dedup();
+                match homes.as_slice() {
+                    [one] => one.to_string(),
+                    [] => return Err(invalid("environment is required for a new service")),
+                    _ => {
+                        return Err(invalid(format!(
+                            "service '{}' exists in several environments; say which one",
+                            svc.name
+                        )));
+                    }
+                }
+            }
+        };
+        let env = core_env(&env_name)?;
+        let Some(env_row) = loaded.environment(&env_name) else {
+            return Err(invalid(format!(
+                "workspace '{}' has no {env_name} environment; add it first",
+                loaded.ws.name
+            )));
+        };
+        let environment_id = env_row.id;
+        // An existing service with this name in this environment keeps its id so the
+        // upsert replaces it.
+        let existing = loaded
+            .services
+            .iter()
+            .find(|s| s.service.name == svc.name && s.service.environment_id == environment_id);
         let service_id = existing.map(|s| s.service.id).unwrap_or_else(Uuid::now_v7);
         let project_id = match existing {
             Some(s) => s.project.id,
@@ -876,10 +1098,15 @@ impl Services for ServicesSvc {
                 .map(|p| p.id)
                 .unwrap_or_else(Uuid::now_v7),
         };
-        let secret_ids = |n: &str| loaded.secret_ids.get(n).copied();
-        let (mut row, ports, env) =
-            model_map::service_from_proto(&svc, service_id, project_id, &secret_ids)
-                .map_err(|e| invalid(e.to_string()))?;
+        let secret_ids = |n: &str| loaded.secret_id(environment_id, n);
+        let (mut row, ports, env_vars) = model_map::service_from_proto(
+            &svc,
+            service_id,
+            environment_id,
+            project_id,
+            &secret_ids,
+        )
+        .map_err(|e| invalid(e.to_string()))?;
         if let Some(e) = existing {
             row.created_at = e.service.created_at;
             row.health_cmd = e.service.health_cmd.clone();
@@ -900,16 +1127,31 @@ impl Services for ServicesSvc {
                 git_ref: "main".into(),
                 git_key_secret_id: None,
             },
+            environment: env_name.clone(),
             ports: ports.clone(),
-            env: env.clone(),
+            env: env_vars.clone(),
         };
-        let core_svc = model_map::service_to_core(&new_full, &loaded.secret_name());
-        for p in &mut core.projects {
+        let core_svc = model_map::service_to_core(&new_full, &loaded.secret_podman_name());
+        let core_env_model = match core.environments.iter_mut().find(|e| e.env == env) {
+            Some(e) => e,
+            None => {
+                core.environments.push(maurice_core::Environment {
+                    env,
+                    projects: vec![],
+                });
+                core.environments.last_mut().expect("just pushed")
+            }
+        };
+        for p in &mut core_env_model.projects {
             p.services.retain(|s| s.name != core_svc.name);
         }
-        match core.projects.iter_mut().find(|p| p.name == project_name) {
+        match core_env_model
+            .projects
+            .iter_mut()
+            .find(|p| p.name == project_name)
+        {
             Some(p) => p.services.push(core_svc.clone()),
-            None => core.projects.push(maurice_core::Project {
+            None => core_env_model.projects.push(maurice_core::Project {
                 name: project_name.clone(),
                 git_repo: None,
                 services: vec![core_svc.clone()],
@@ -939,7 +1181,8 @@ impl Services for ServicesSvc {
             .await
             .map_err(internal)?
         {
-            if pr.workspace == loaded.ws.name && pr.service == row.name {
+            // Conflicts inside this workspace are the validator's findings above.
+            if pr.workspace == loaded.ws.name {
                 continue;
             }
             for mine in ports.iter().filter(|p| p.published) {
@@ -953,8 +1196,8 @@ impl Services for ServicesSvc {
                         severity: "error".into(),
                         code: "port.conflict".into(),
                         message: format!(
-                            "{bind} is already published by {}/{}",
-                            pr.workspace, pr.service
+                            "{bind} is already published by {}/{}/{}",
+                            pr.workspace, pr.environment, pr.service
                         ),
                         target: format!("port:{bind}"),
                     });
@@ -963,10 +1206,11 @@ impl Services for ServicesSvc {
         }
 
         // Render and diff against disk.
-        let image = image_of(&core_svc, &core.name);
+        let image = image_of(&core_svc, &core.name, env);
+        let stem = maurice_quadlet::unit_stem(env, &row.name);
+        let unit = format!("{stem}.service");
         let deployed = match existing {
             Some(e) => {
-                let unit = format!("{}.service", e.service.name);
                 let active = self
                     .state
                     .agent
@@ -985,7 +1229,14 @@ impl Services for ServicesSvc {
             }
             None => false,
         };
-        let units = render_units(&core, &core_svc, &image, "dev", deployed)?;
+        let units = render_units(
+            &core,
+            env,
+            &core_svc,
+            &image,
+            &maurice_quadlet::image_version(&image),
+            deployed,
+        )?;
         let mut changes = Vec::new();
         for u in &units {
             let on_disk = self
@@ -1004,7 +1255,6 @@ impl Services for ServicesSvc {
                 });
             }
         }
-        let unit = format!("{}.service", row.name);
         let running = existing.is_some()
             && self
                 .state
@@ -1031,11 +1281,13 @@ impl Services for ServicesSvc {
         }
         let payload = PlanPayload::UpsertService {
             workspace_id: wid,
+            environment_id,
+            environment: env_name,
             project_id,
             project_name,
             service: row,
             ports,
-            env,
+            env: env_vars,
             units,
             running_unit: running.then_some(unit),
         };
@@ -1047,17 +1299,18 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, PlanDeployRequest>,
     ) -> ServiceResult<Plan> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
+        let full = &t.full;
         let core = loaded.core();
         let core_svc = core
-            .services()
-            .find(|s| s.name == full.service.name)
+            .environment(t.env)
+            .and_then(|e| e.services().find(|s| s.name == full.service.name))
             .ok_or_else(|| internal("service missing from model"))?;
         let mut findings: Vec<StoredFinding> = maurice_core::validate_workspace(&core)
             .iter()
             .map(StoredFinding::from)
             .collect();
-        let unit = format!("{}.service", full.service.name);
+        let unit = t.unit.clone();
         let running = self
             .state
             .agent
@@ -1073,7 +1326,7 @@ impl Services for ServicesSvc {
                 dockerfile,
                 context,
             } => {
-                let image = format!("localhost/{}/{}", core.name, core_svc.name);
+                let image = build_image_name(&core.name, t.env, &core_svc.name);
                 match full.project.git_repo.as_deref().filter(|r| !r.is_empty()) {
                     None => findings.push(StoredFinding {
                         severity: "error".into(),
@@ -1088,7 +1341,7 @@ impl Services for ServicesSvc {
                         let key_secret_name = full
                             .project
                             .git_key_secret_id
-                            .map(|id| loaded.secret_names.get(&id).cloned().unwrap_or_default());
+                            .map(|id| loaded.secret_name()(id).unwrap_or_default());
                         changes.push(StoredChange {
                             kind: "build_image".into(),
                             target: format!("{repo}@{} → {image}:<sha>", full.project.git_ref),
@@ -1099,7 +1352,7 @@ impl Services for ServicesSvc {
                             kind: "write_unit".into(),
                             target: format!(
                                 "{}/{}.container (Image= and version)",
-                                loaded.ws.unix_user, core_svc.name
+                                loaded.ws.unix_user, t.stem
                             ),
                             diff: String::new(),
                             destructive: false,
@@ -1111,7 +1364,7 @@ impl Services for ServicesSvc {
                             dockerfile: dockerfile.clone(),
                             context: context.clone(),
                             image: image.clone(),
-                            service_name: core_svc.name.clone(),
+                            checkout: t.stem.clone(),
                         });
                     }
                 }
@@ -1166,14 +1419,15 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, PlanDeleteServiceRequest>,
     ) -> ServiceResult<Plan> {
-        let (full, loaded) = self.service_and_workspace(req.id).await?;
+        let (t, loaded) = self.service_and_workspace(req.id).await?;
+        let full = &t.full;
         let core = loaded.core();
         let core_svc = core
-            .services()
-            .find(|s| s.name == full.service.name)
+            .environment(t.env)
+            .and_then(|e| e.services().find(|s| s.name == full.service.name))
             .ok_or_else(|| internal("service missing from model"))?;
-        let unit = format!("{}.service", full.service.name);
-        let mut unit_files = vec![format!("{}.container", full.service.name)];
+        let unit = t.unit.clone();
+        let mut unit_files = vec![format!("{}.container", t.stem)];
         let mut changes = vec![
             StoredChange {
                 kind: "stop_unit".into(),
@@ -1183,13 +1437,13 @@ impl Services for ServicesSvc {
             },
             StoredChange {
                 kind: "remove_unit".into(),
-                target: format!("{}/{}.container", loaded.ws.unix_user, full.service.name),
+                target: format!("{}/{}.container", loaded.ws.unix_user, t.stem),
                 diff: String::new(),
                 destructive: true,
             },
         ];
         if req.purge_volumes {
-            for v in maurice_quadlet::render_volumes(core_svc) {
+            for v in maurice_quadlet::render_volumes(t.env, core_svc) {
                 changes.push(StoredChange {
                     kind: "remove_unit".into(),
                     target: format!(
@@ -1217,10 +1471,10 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, RestartRequest>,
     ) -> ServiceResult<Empty> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
         self.state
             .agent
-            .restart_unit(&loaded.user, &format!("{}.service", full.service.name))
+            .restart_unit(&loaded.user, &t.unit)
             .await
             .map_err(internal)?;
         Response::ok(Empty::default())
@@ -1231,10 +1485,10 @@ impl Services for ServicesSvc {
         _ctx: RequestContext,
         req: ServiceRequest<'_, StopRequest>,
     ) -> ServiceResult<Empty> {
-        let (full, loaded) = self.service_and_workspace(req.service_id).await?;
+        let (t, loaded) = self.service_and_workspace(req.service_id).await?;
         self.state
             .agent
-            .stop_unit(&loaded.user, &format!("{}.service", full.service.name))
+            .stop_unit(&loaded.user, &t.unit)
             .await
             .map_err(internal)?;
         Response::ok(Empty::default())
@@ -1311,9 +1565,9 @@ impl Projects for ProjectsSvc {
         let key_id = if req.git_key_secret.is_empty() {
             None
         } else {
-            Some(*loaded.secret_ids.get(req.git_key_secret).ok_or_else(|| {
+            Some(loaded.shared_secret_id(req.git_key_secret).ok_or_else(|| {
                 invalid(format!(
-                    "secret '{}' does not exist in this workspace",
+                    "shared secret '{}' does not exist in this workspace (deploy keys are workspace-wide)",
                     req.git_key_secret
                 ))
             })?)
@@ -1336,11 +1590,15 @@ pub struct SecretsSvc {
     pub state: Arc<State>,
 }
 
-fn secret_to_proto(s: &maurice_db::SecretRow) -> SecretInfo {
+fn secret_to_proto(s: &maurice_db::SecretRow, environment: Option<&str>) -> SecretInfo {
     SecretInfo {
         id: s.id.to_string(),
         workspace_id: s.workspace_id.to_string(),
         name: s.name.clone(),
+        environment: environment
+            .map(env_to_proto)
+            .unwrap_or(Env::ENV_UNSPECIFIED)
+            .into(),
         version: s.version as u32,
         created_at: buffa_types::Timestamp {
             seconds: s.created_at.unix_timestamp(),
@@ -1360,9 +1618,18 @@ impl Secrets for SecretsSvc {
         req: ServiceRequest<'_, ListSecretsRequest>,
     ) -> ServiceResult<ListSecretsResponse> {
         let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
         let rows = self.state.store.list_secrets(wid).await.map_err(internal)?;
         Response::ok(ListSecretsResponse {
-            secrets: rows.iter().map(secret_to_proto).collect(),
+            secrets: rows
+                .iter()
+                .map(|s| {
+                    secret_to_proto(
+                        s,
+                        s.environment_id.and_then(|id| loaded.environment_name(id)),
+                    )
+                })
+                .collect(),
             ..Default::default()
         })
     }
@@ -1378,20 +1645,39 @@ impl Secrets for SecretsSvc {
         if req.value.is_empty() {
             return Err(invalid("secret value must not be empty"));
         }
+        let environment = env_from_proto(req.environment);
+        let environment_id = match environment {
+            Some(name) => Some(
+                loaded
+                    .environment(name)
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "workspace '{}' has no {name} environment",
+                            loaded.ws.name
+                        ))
+                    })?
+                    .id,
+            ),
+            None => None,
+        };
         let sealed = self.state.master_key.seal(req.value).map_err(internal)?;
         // Push to the host first: if podman refuses, nothing is recorded.
         self.state
             .agent
-            .set_secret(&loaded.user, req.name, req.value)
+            .set_secret(
+                &loaded.user,
+                &podman_secret_name(environment, req.name),
+                req.value,
+            )
             .await
             .map_err(internal)?;
         let row = self
             .state
             .store
-            .insert_secret_version(wid, req.name, &sealed)
+            .insert_secret_version(wid, environment_id, req.name, &sealed)
             .await
             .map_err(internal)?;
-        Response::ok(secret_to_proto(&row))
+        Response::ok(secret_to_proto(&row, environment))
     }
 }
 
@@ -1422,7 +1708,7 @@ async fn execute(
     match payload {
         PlanPayload::CreateWorkspace {
             name,
-            env,
+            environments,
             unix_user,
             home,
             subuid_start,
@@ -1446,7 +1732,6 @@ async fn execute(
                 subuid_start,
                 subuid_len,
                 home,
-                env,
                 cpu_slice: None,
                 created_at: OffsetDateTime::now_utc(),
             };
@@ -1456,6 +1741,61 @@ async fn execute(
                 DONE,
                 format!("workspace {} uid {}", wrow.id, user.uid),
             ));
+            let shell = core_workspace_shell(&wrow);
+            for (i, name) in environments.iter().enumerate() {
+                let env = CoreEnv::parse(name)
+                    .ok_or_else(|| anyhow::anyhow!("unknown environment '{name}'"))?;
+                let net = maurice_quadlet::render_network(&shell, env);
+                events.push(event(i + 1, STARTED, format!("writing {}", net.file_name)));
+                state
+                    .store
+                    .insert_environment(&EnvironmentRow {
+                        id: Uuid::now_v7(),
+                        workspace_id: wrow.id,
+                        name: name.clone(),
+                        created_at: OffsetDateTime::now_utc(),
+                    })
+                    .await?;
+                state
+                    .agent
+                    .write_unit(&user, &net.file_name, &net.content)
+                    .await?;
+                events.push(event(i + 1, DONE, format!("{name} environment ready")));
+            }
+            state.agent.daemon_reload(&user).await?;
+        }
+        PlanPayload::AddEnvironment {
+            workspace_id,
+            environment,
+        } => {
+            let ws = state
+                .store
+                .get_workspace(workspace_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("workspace vanished"))?;
+            let user = UserRef {
+                name: ws.unix_user.clone(),
+                uid: ws.uid as u32,
+            };
+            let env = CoreEnv::parse(&environment)
+                .ok_or_else(|| anyhow::anyhow!("unknown environment '{environment}'"))?;
+            let net = maurice_quadlet::render_network(&core_workspace_shell(&ws), env);
+            events.push(event(0, STARTED, format!("writing {}", net.file_name)));
+            state
+                .store
+                .insert_environment(&EnvironmentRow {
+                    id: Uuid::now_v7(),
+                    workspace_id: ws.id,
+                    name: environment.clone(),
+                    created_at: OffsetDateTime::now_utc(),
+                })
+                .await?;
+            state
+                .agent
+                .write_unit(&user, &net.file_name, &net.content)
+                .await?;
+            state.agent.daemon_reload(&user).await?;
+            events.push(event(0, DONE, format!("{environment} environment ready")));
         }
         PlanPayload::DeleteWorkspace {
             workspace_id,
@@ -1491,6 +1831,8 @@ async fn execute(
         }
         PlanPayload::UpsertService {
             workspace_id,
+            environment_id,
+            environment,
             project_id,
             project_name,
             service,
@@ -1525,10 +1867,17 @@ async fn execute(
             };
             let mut service = service;
             service.project_id = project.id;
-            events.push(event(0, STARTED, format!("saving {}", service.name)));
+            service.environment_id = environment_id;
+            events.push(event(
+                0,
+                STARTED,
+                format!("saving {environment}/{}", service.name),
+            ));
             state.store.upsert_service(&service, &ports, &env).await?;
-            // The network unit is shared by the workspace; writing it is idempotent.
-            let net = maurice_quadlet::render_network(&core_workspace_shell(&ws));
+            // The network unit is shared by the environment; writing it is idempotent.
+            let env_kind = CoreEnv::parse(&environment)
+                .ok_or_else(|| anyhow::anyhow!("unknown environment '{environment}'"))?;
+            let net = maurice_quadlet::render_network(&core_workspace_shell(&ws), env_kind);
             state
                 .agent
                 .write_unit(&user, &net.file_name, &net.content)
@@ -1579,7 +1928,7 @@ async fn execute(
                     Some(name) if !name.is_empty() => {
                         let row = state
                             .store
-                            .latest_secret(workspace_id, name)
+                            .latest_secret(workspace_id, None, name)
                             .await?
                             .ok_or_else(|| {
                                 anyhow::anyhow!("deploy key secret '{name}' not found")
@@ -1599,7 +1948,7 @@ async fn execute(
                             dockerfile: b.dockerfile.clone(),
                             context: b.context.clone(),
                             image: b.image.clone(),
-                            checkout: b.service_name.clone(),
+                            checkout: b.checkout.clone(),
                         },
                     )
                     .await?;
@@ -1620,23 +1969,26 @@ async fn execute(
             // Re-render the container unit with the image to run and mark it enabled, so it
             // comes back after a reboot. Units of never-deployed services carry no [Install].
             {
-                let projects = state.store.list_projects(workspace_id).await?;
-                let services = state.store.list_services(workspace_id).await?;
-                let secrets = state.store.list_secrets(workspace_id).await?;
-                let names: HashMap<Uuid, String> =
-                    secrets.iter().map(|s| (s.id, s.name.clone())).collect();
-                let name_of = |id: Uuid| names.get(&id).cloned();
-                let core = model_map::workspace_to_core(&ws, &projects, &services, &name_of);
-                let svc_name = unit.trim_end_matches(".service");
+                let loaded = load(state, workspace_id)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let core = loaded.core();
+                let row = loaded
+                    .services
+                    .iter()
+                    .find(|s| s.service.id == service_id)
+                    .ok_or_else(|| anyhow::anyhow!("service vanished"))?;
+                let env = CoreEnv::parse(&row.environment)
+                    .ok_or_else(|| anyhow::anyhow!("unknown environment '{}'", row.environment))?;
                 let svc = core
-                    .services()
-                    .find(|s| s.name == svc_name)
+                    .environment(env)
+                    .and_then(|e| e.services().find(|s| s.name == row.service.name))
                     .ok_or_else(|| anyhow::anyhow!("service vanished"))?;
                 let version = git_sha
                     .as_deref()
                     .map(|s| s.get(..12).unwrap_or(s).to_string())
-                    .unwrap_or_else(|| "dev".into());
-                let units = render_units(&core, svc, &image, &version, true)
+                    .unwrap_or_else(|| maurice_quadlet::image_version(&image));
+                let units = render_units(&core, env, svc, &image, &version, true)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 for u in &units {
                     events.push(event(idx, STARTED, format!("writing {}", u.file_name)));

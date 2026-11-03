@@ -10,6 +10,7 @@ import { workspaces, services, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
 import { ServiceForm } from "../components/ServiceForm";
 import { Sparkline, Meter } from "../components/Sparkline";
+import { envLabel, envTone } from "../env";
 import { onCleanup, createEffect } from "solid-js";
 import { stateTone } from "./Workspace";
 
@@ -114,7 +115,7 @@ export function ServiceView() {
     setError("");
     try {
       const def: Service = fromJson(ServiceSchema, JSON.parse(definitionJson()));
-      setPlan(await services.planUpsert({ workspaceId: params.wsId, project: "", service: def }));
+      setPlan(await services.planUpsert({ workspaceId: params.wsId, project: "", service: def, environment: svc()?.environment }));
     } catch (err) {
       setError(errorText(err));
     }
@@ -134,6 +135,7 @@ export function ServiceView() {
         <span class="muted">/</span>
         <span class={`dot ${stateTone(status())}`} />
         <h2>{svc()?.name ?? "…"}</h2>
+        <Show when={svc()}>{(s) => <span class={`pill ${envTone(s().environment)}`}>{envLabel(s().environment)}</span>}</Show>
         <Show when={svc()}>{(s) => <span class="pill">{s().kind === ServiceKind.STATEFUL ? "stateful" : "stateless"}</span>}</Show>
         <span class="muted small">{status() ? `${status()!.activeState} (${status()!.subState})` : "no unit yet"}</span>
         <span style={{ "margin-left": "auto" }} />
@@ -284,7 +286,7 @@ export function ServiceView() {
                 onSubmit={async (def) => {
                   setError("");
                   try {
-                    setPlan(await services.planUpsert({ workspaceId: params.wsId, project: "", service: def }));
+                    setPlan(await services.planUpsert({ workspaceId: params.wsId, project: "", service: def, environment: s().environment }));
                   } catch (err) {
                     setError(errorText(err));
                   }

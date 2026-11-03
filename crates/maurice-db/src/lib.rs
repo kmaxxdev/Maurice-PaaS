@@ -30,8 +30,16 @@ pub struct WorkspaceRow {
     pub subuid_start: i64,
     pub subuid_len: i32,
     pub home: String,
-    pub env: String,
     pub cpu_slice: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+/// One environment of a workspace: `dev`, `staging` or `prod`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
+pub struct EnvironmentRow {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub name: String,
     pub created_at: OffsetDateTime,
 }
 
@@ -92,8 +100,8 @@ impl Store {
 
     pub async fn insert_workspace(&self, w: &WorkspaceRow) -> anyhow::Result<()> {
         sqlx::query(
-            "insert into workspaces (id, name, unix_user, uid, subuid_start, subuid_len, home, env, cpu_slice, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            "insert into workspaces (id, name, unix_user, uid, subuid_start, subuid_len, home, cpu_slice, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(w.id)
         .bind(&w.name)
@@ -102,9 +110,50 @@ impl Store {
         .bind(w.subuid_start)
         .bind(w.subuid_len)
         .bind(&w.home)
-        .bind(&w.env)
         .bind(&w.cpu_slice)
         .bind(w.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // --- environments ---
+
+    pub async fn list_environments(
+        &self,
+        workspace_id: Uuid,
+    ) -> anyhow::Result<Vec<EnvironmentRow>> {
+        Ok(sqlx::query_as::<_, EnvironmentRow>(
+            "select * from environments where workspace_id = $1
+             order by case name when 'dev' then 0 when 'staging' then 1 else 2 end",
+        )
+        .bind(workspace_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn get_environment(
+        &self,
+        workspace_id: Uuid,
+        name: &str,
+    ) -> anyhow::Result<Option<EnvironmentRow>> {
+        Ok(sqlx::query_as::<_, EnvironmentRow>(
+            "select * from environments where workspace_id = $1 and name = $2",
+        )
+        .bind(workspace_id)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    pub async fn insert_environment(&self, e: &EnvironmentRow) -> anyhow::Result<()> {
+        sqlx::query(
+            "insert into environments (id, workspace_id, name, created_at) values ($1, $2, $3, $4)",
+        )
+        .bind(e.id)
+        .bind(e.workspace_id)
+        .bind(&e.name)
+        .bind(e.created_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -190,6 +239,7 @@ pub struct ProjectRow {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct ServiceRow {
     pub id: Uuid,
+    pub environment_id: Uuid,
     pub project_id: Uuid,
     pub name: String,
     pub kind: String,
@@ -228,6 +278,8 @@ pub struct EnvVarRow {
 pub struct SecretRow {
     pub id: Uuid,
     pub workspace_id: Uuid,
+    /// None = shared by the whole workspace.
+    pub environment_id: Option<Uuid>,
     pub service_id: Option<Uuid>,
     pub name: String,
     pub encrypted_value: Vec<u8>,
@@ -252,6 +304,7 @@ pub struct PublishedPort {
     pub host_ip: Option<String>,
     pub host_port: Option<i32>,
     pub workspace: String,
+    pub environment: String,
     pub service: String,
 }
 
@@ -260,6 +313,8 @@ pub struct PublishedPort {
 pub struct ServiceFull {
     pub service: ServiceRow,
     pub project: ProjectRow,
+    /// Name of the environment the service runs in.
+    pub environment: String,
     pub ports: Vec<PortRow>,
     pub env: Vec<EnvVarRow>,
 }
@@ -360,13 +415,13 @@ impl Store {
 
     pub async fn get_service_by_name(
         &self,
-        workspace_id: Uuid,
+        environment_id: Uuid,
         name: &str,
     ) -> anyhow::Result<Option<ServiceFull>> {
         let row = sqlx::query_as::<_, ServiceRow>(
-            "select s.* from services s join projects p on p.id = s.project_id where p.workspace_id = $1 and s.name = $2",
+            "select * from services where environment_id = $1 and name = $2",
         )
-        .bind(workspace_id)
+        .bind(environment_id)
         .bind(name)
         .fetch_optional(&self.pool)
         .await?;
@@ -379,6 +434,10 @@ impl Store {
     async fn hydrate(&self, s: ServiceRow) -> anyhow::Result<ServiceFull> {
         let project = sqlx::query_as::<_, ProjectRow>("select * from projects where id = $1")
             .bind(s.project_id)
+            .fetch_one(&self.pool)
+            .await?;
+        let environment: String = sqlx::query_scalar("select name from environments where id = $1")
+            .bind(s.environment_id)
             .fetch_one(&self.pool)
             .await?;
         let ports = sqlx::query_as::<_, PortRow>(
@@ -396,6 +455,7 @@ impl Store {
         Ok(ServiceFull {
             service: s,
             project,
+            environment,
             ports,
             env,
         })
@@ -410,13 +470,14 @@ impl Store {
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
-            "insert into services (id, project_id, name, kind, source_kind, image_ref, dockerfile, build_context, cpu, memory_bytes, isolated, health_cmd, created_at)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            "insert into services (id, environment_id, project_id, name, kind, source_kind, image_ref, dockerfile, build_context, cpu, memory_bytes, isolated, health_cmd, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              on conflict (id) do update set kind = excluded.kind, source_kind = excluded.source_kind, image_ref = excluded.image_ref,
                dockerfile = excluded.dockerfile, build_context = excluded.build_context, cpu = excluded.cpu, memory_bytes = excluded.memory_bytes,
                isolated = excluded.isolated, health_cmd = excluded.health_cmd",
         )
         .bind(s.id)
+        .bind(s.environment_id)
         .bind(s.project_id)
         .bind(&s.name)
         .bind(&s.kind)
@@ -468,9 +529,9 @@ impl Store {
     /// Every published host binding on the host with the workspace and service that owns it.
     pub async fn list_published_ports(&self) -> anyhow::Result<Vec<PublishedPort>> {
         Ok(sqlx::query_as::<_, PublishedPort>(
-            "select p.host_ip, p.host_port, w.name as workspace, s.name as service
-             from ports p join services s on s.id = p.service_id join projects pr on pr.id = s.project_id
-             join workspaces w on w.id = pr.workspace_id where p.published",
+            "select p.host_ip, p.host_port, w.name as workspace, e.name as environment, s.name as service
+             from ports p join services s on s.id = p.service_id join environments e on e.id = s.environment_id
+             join workspaces w on w.id = e.workspace_id where p.published",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -486,9 +547,11 @@ impl Store {
 
     // --- secrets ---
 
+    /// Latest version of every secret in the workspace, shared and per environment.
     pub async fn list_secrets(&self, workspace_id: Uuid) -> anyhow::Result<Vec<SecretRow>> {
         Ok(sqlx::query_as::<_, SecretRow>(
-            "select distinct on (name) * from secrets where workspace_id = $1 order by name, version desc",
+            "select distinct on (environment_id, name) * from secrets where workspace_id = $1
+             order by environment_id nulls first, name, version desc",
         )
         .bind(workspace_id)
         .fetch_all(&self.pool)
@@ -504,15 +567,19 @@ impl Store {
         )
     }
 
+    /// Latest version of a secret in one scope: an environment, or the workspace when `None`.
     pub async fn latest_secret(
         &self,
         workspace_id: Uuid,
+        environment_id: Option<Uuid>,
         name: &str,
     ) -> anyhow::Result<Option<SecretRow>> {
         Ok(sqlx::query_as::<_, SecretRow>(
-            "select * from secrets where workspace_id = $1 and name = $2 order by version desc limit 1",
+            "select * from secrets where workspace_id = $1 and environment_id is not distinct from $2 and name = $3
+             order by version desc limit 1",
         )
         .bind(workspace_id)
+        .bind(environment_id)
         .bind(name)
         .fetch_optional(&self.pool)
         .await?)
@@ -522,26 +589,29 @@ impl Store {
     pub async fn insert_secret_version(
         &self,
         workspace_id: Uuid,
+        environment_id: Option<Uuid>,
         name: &str,
         encrypted_value: &[u8],
     ) -> anyhow::Result<SecretRow> {
         let version = self
-            .latest_secret(workspace_id, name)
+            .latest_secret(workspace_id, environment_id, name)
             .await?
             .map(|s| s.version + 1)
             .unwrap_or(1);
         let row = SecretRow {
             id: Uuid::now_v7(),
             workspace_id,
+            environment_id,
             service_id: None,
             name: name.into(),
             encrypted_value: encrypted_value.to_vec(),
             version,
             created_at: OffsetDateTime::now_utc(),
         };
-        sqlx::query("insert into secrets (id, workspace_id, service_id, name, encrypted_value, version, created_at) values ($1, $2, $3, $4, $5, $6, $7)")
+        sqlx::query("insert into secrets (id, workspace_id, environment_id, service_id, name, encrypted_value, version, created_at) values ($1, $2, $3, $4, $5, $6, $7, $8)")
             .bind(row.id)
             .bind(row.workspace_id)
+            .bind(row.environment_id)
             .bind(row.service_id)
             .bind(&row.name)
             .bind(&row.encrypted_value)

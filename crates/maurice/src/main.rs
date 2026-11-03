@@ -111,27 +111,31 @@ async fn main() -> anyhow::Result<()> {
             if maurice_core::validate::has_errors(&findings) {
                 anyhow::bail!("validation failed");
             }
-            let net = maurice_quadlet::render_network(&ws);
-            println!("# ==> {}\n{}", net.file_name, net.content);
-            for svc in ws.services() {
-                for v in maurice_quadlet::render_volumes(svc) {
-                    println!("# ==> {}\n{}", v.file_name, v.content);
-                }
-                let image = match &svc.source {
-                    maurice_core::Source::Image { reference } => reference.clone(),
-                    maurice_core::Source::Build { .. } => {
-                        format!("localhost/{}/{}:dev", ws.name, svc.name)
+            for environment in &ws.environments {
+                let env = environment.env;
+                let net = maurice_quadlet::render_network(&ws, env);
+                println!("# ==> {}\n{}", net.file_name, net.content);
+                for svc in environment.services() {
+                    for v in maurice_quadlet::render_volumes(env, svc) {
+                        println!("# ==> {}\n{}", v.file_name, v.content);
                     }
-                };
-                let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
-                    workspace: &ws,
-                    service: svc,
-                    image: &image,
-                    version: "dev",
-                    resolve_ref: &|r| Some(format!("<{r}>")),
-                    enabled: true,
-                })?;
-                println!("# ==> {}\n{}", unit.file_name, unit.content);
+                    let image = match &svc.source {
+                        maurice_core::Source::Image { reference } => reference.clone(),
+                        maurice_core::Source::Build { .. } => {
+                            format!("localhost/{}/{env}/{}:pending", ws.name, svc.name)
+                        }
+                    };
+                    let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
+                        workspace: &ws,
+                        env,
+                        service: svc,
+                        image: &image,
+                        version: &maurice_quadlet::image_version(&image),
+                        resolve_ref: &|r| Some(format!("<{r}>")),
+                        enabled: true,
+                    })?;
+                    println!("# ==> {}\n{}", unit.file_name, unit.content);
+                }
             }
         }
         Command::Host { command } => {

@@ -12,7 +12,8 @@ message Workspace {
   uint32 subuid_start = 5;
   uint32 subuid_len = 6;
   string home = 7;
-  Env env = 8;
+  // Environments that exist in this workspace, each with its own network.
+  repeated Env environments = 8;
   string cpu_slice = 9;
 }
 
@@ -25,7 +26,12 @@ message GetWorkspaceRequest {
 }
 message PlanCreateWorkspaceRequest {
   string name = 1;
-  Env env = 2;
+  // Environments to create with the workspace; empty = dev and prod.
+  repeated Env environments = 2;
+}
+message PlanAddEnvironmentRequest {
+  string workspace_id = 1;
+  Env environment = 2;
 }
 message PlanDeleteWorkspaceRequest {
   string id = 1;
@@ -40,6 +46,8 @@ service Workspaces {
   rpc Get(GetWorkspaceRequest) returns (Workspace);
   // scope: plan
   rpc PlanCreate(PlanCreateWorkspaceRequest) returns (Plan);
+  // scope: plan. Adds an environment (and its network) to an existing workspace.
+  rpc PlanAddEnvironment(PlanAddEnvironmentRequest) returns (Plan);
   // scope: plan; the resulting plan is destructive
   rpc PlanDelete(PlanDeleteWorkspaceRequest) returns (Plan);
 }

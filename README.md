@@ -47,7 +47,7 @@ sudo ln -sf maurice /usr/local/bin/marik
 sudo maurice host prepare                                # PostgreSQL, keys, journald, maurice.service
 sudo systemctl enable --now maurice                      # panel on 127.0.0.1:7700
 
-marik workspace create shop && marik plan apply <plan-id>
+marik workspace create shop && marik plan apply <plan-id>   # dev and prod environments, one network each
 ```
 
 Full walkthrough, CLI reference and known limits: the

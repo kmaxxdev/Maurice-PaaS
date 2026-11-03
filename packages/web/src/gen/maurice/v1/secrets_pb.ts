@@ -6,13 +6,15 @@ import type { GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegen
 import { fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
+import type { Env } from "./common_pb";
+import { file_maurice_v1_common } from "./common_pb";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file maurice/v1/secrets.proto.
  */
 export const file_maurice_v1_secrets: GenFile = /*@__PURE__*/
-  fileDesc("ChhtYXVyaWNlL3YxL3NlY3JldHMucHJvdG8SCm1hdXJpY2UudjEifQoKU2VjcmV0SW5mbxIKCgJpZBgBIAEoCRIUCgx3b3Jrc3BhY2VfaWQYAiABKAkSDAoEbmFtZRgDIAEoCRIPCgd2ZXJzaW9uGAQgASgNEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIioKEkxpc3RTZWNyZXRzUmVxdWVzdBIUCgx3b3Jrc3BhY2VfaWQYASABKAkiPgoTTGlzdFNlY3JldHNSZXNwb25zZRInCgdzZWNyZXRzGAEgAygLMhYubWF1cmljZS52MS5TZWNyZXRJbmZvIkUKEFNldFNlY3JldFJlcXVlc3QSFAoMd29ya3NwYWNlX2lkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFdmFsdWUYAyABKAwyjwEKB1NlY3JldHMSRwoETGlzdBIeLm1hdXJpY2UudjEuTGlzdFNlY3JldHNSZXF1ZXN0Gh8ubWF1cmljZS52MS5MaXN0U2VjcmV0c1Jlc3BvbnNlEjsKA1NldBIcLm1hdXJpY2UudjEuU2V0U2VjcmV0UmVxdWVzdBoWLm1hdXJpY2UudjEuU2VjcmV0SW5mb2IGcHJvdG8z", [file_google_protobuf_timestamp]);
+  fileDesc("ChhtYXVyaWNlL3YxL3NlY3JldHMucHJvdG8SCm1hdXJpY2UudjEiowEKClNlY3JldEluZm8SCgoCaWQYASABKAkSFAoMd29ya3NwYWNlX2lkGAIgASgJEgwKBG5hbWUYAyABKAkSDwoHdmVyc2lvbhgEIAEoDRIuCgpjcmVhdGVkX2F0GAUgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIkCgtlbnZpcm9ubWVudBgGIAEoDjIPLm1hdXJpY2UudjEuRW52IioKEkxpc3RTZWNyZXRzUmVxdWVzdBIUCgx3b3Jrc3BhY2VfaWQYASABKAkiPgoTTGlzdFNlY3JldHNSZXNwb25zZRInCgdzZWNyZXRzGAEgAygLMhYubWF1cmljZS52MS5TZWNyZXRJbmZvImsKEFNldFNlY3JldFJlcXVlc3QSFAoMd29ya3NwYWNlX2lkGAEgASgJEgwKBG5hbWUYAiABKAkSDQoFdmFsdWUYAyABKAwSJAoLZW52aXJvbm1lbnQYBCABKA4yDy5tYXVyaWNlLnYxLkVudjKPAQoHU2VjcmV0cxJHCgRMaXN0Eh4ubWF1cmljZS52MS5MaXN0U2VjcmV0c1JlcXVlc3QaHy5tYXVyaWNlLnYxLkxpc3RTZWNyZXRzUmVzcG9uc2USOwoDU2V0EhwubWF1cmljZS52MS5TZXRTZWNyZXRSZXF1ZXN0GhYubWF1cmljZS52MS5TZWNyZXRJbmZvYgZwcm90bzM", [file_google_protobuf_timestamp, file_maurice_v1_common]);
 
 /**
  * Values never leave the panel: only names and metadata are listed.
@@ -44,6 +46,13 @@ export type SecretInfo = Message<"maurice.v1.SecretInfo"> & {
    * @generated from field: google.protobuf.Timestamp created_at = 5;
    */
   createdAt?: Timestamp | undefined;
+
+  /**
+   * Environment the secret belongs to; unspecified = shared by the whole workspace.
+   *
+   * @generated from field: maurice.v1.Env environment = 6;
+   */
+  environment: Env;
 };
 
 /**
@@ -105,6 +114,13 @@ export type SetSecretRequest = Message<"maurice.v1.SetSecretRequest"> & {
    * @generated from field: bytes value = 3;
    */
   value: Uint8Array;
+
+  /**
+   * Environment to scope the secret to; unspecified = shared by the whole workspace.
+   *
+   * @generated from field: maurice.v1.Env environment = 4;
+   */
+  environment: Env;
 };
 
 /**

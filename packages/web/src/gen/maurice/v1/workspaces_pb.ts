@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file maurice/v1/workspaces.proto.
  */
 export const file_maurice_v1_workspaces: GenFile = /*@__PURE__*/
-  fileDesc("ChttYXVyaWNlL3YxL3dvcmtzcGFjZXMucHJvdG8SCm1hdXJpY2UudjEirgEKCVdvcmtzcGFjZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCXVuaXhfdXNlchgDIAEoCRILCgN1aWQYBCABKA0SFAoMc3VidWlkX3N0YXJ0GAUgASgNEhIKCnN1YnVpZF9sZW4YBiABKA0SDAoEaG9tZRgHIAEoCRIcCgNlbnYYCCABKA4yDy5tYXVyaWNlLnYxLkVudhIRCgljcHVfc2xpY2UYCSABKAkiFwoVTGlzdFdvcmtzcGFjZXNSZXF1ZXN0IkMKFkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USKQoKd29ya3NwYWNlcxgBIAMoCzIVLm1hdXJpY2UudjEuV29ya3NwYWNlIiEKE0dldFdvcmtzcGFjZVJlcXVlc3QSCgoCaWQYASABKAkiSAoaUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIcCgNlbnYYAiABKA4yDy5tYXVyaWNlLnYxLkVudiI3ChpQbGFuRGVsZXRlV29ya3NwYWNlUmVxdWVzdBIKCgJpZBgBIAEoCRINCgVwdXJnZRgCIAEoCDKqAgoKV29ya3NwYWNlcxJNCgRMaXN0EiEubWF1cmljZS52MS5MaXN0V29ya3NwYWNlc1JlcXVlc3QaIi5tYXVyaWNlLnYxLkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USPQoDR2V0Eh8ubWF1cmljZS52MS5HZXRXb3Jrc3BhY2VSZXF1ZXN0GhUubWF1cmljZS52MS5Xb3Jrc3BhY2USRgoKUGxhbkNyZWF0ZRImLm1hdXJpY2UudjEuUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SRgoKUGxhbkRlbGV0ZRImLm1hdXJpY2UudjEuUGxhbkRlbGV0ZVdvcmtzcGFjZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW5iBnByb3RvMw", [file_maurice_v1_common]);
+  fileDesc("ChttYXVyaWNlL3YxL3dvcmtzcGFjZXMucHJvdG8SCm1hdXJpY2UudjEitwEKCVdvcmtzcGFjZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCXVuaXhfdXNlchgDIAEoCRILCgN1aWQYBCABKA0SFAoMc3VidWlkX3N0YXJ0GAUgASgNEhIKCnN1YnVpZF9sZW4YBiABKA0SDAoEaG9tZRgHIAEoCRIlCgxlbnZpcm9ubWVudHMYCCADKA4yDy5tYXVyaWNlLnYxLkVudhIRCgljcHVfc2xpY2UYCSABKAkiFwoVTGlzdFdvcmtzcGFjZXNSZXF1ZXN0IkMKFkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USKQoKd29ya3NwYWNlcxgBIAMoCzIVLm1hdXJpY2UudjEuV29ya3NwYWNlIiEKE0dldFdvcmtzcGFjZVJlcXVlc3QSCgoCaWQYASABKAkiUQoaUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIlCgxlbnZpcm9ubWVudHMYAiADKA4yDy5tYXVyaWNlLnYxLkVudiJXChlQbGFuQWRkRW52aXJvbm1lbnRSZXF1ZXN0EhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIkCgtlbnZpcm9ubWVudBgCIAEoDjIPLm1hdXJpY2UudjEuRW52IjcKGlBsYW5EZWxldGVXb3Jrc3BhY2VSZXF1ZXN0EgoKAmlkGAEgASgJEg0KBXB1cmdlGAIgASgIMvkCCgpXb3Jrc3BhY2VzEk0KBExpc3QSIS5tYXVyaWNlLnYxLkxpc3RXb3Jrc3BhY2VzUmVxdWVzdBoiLm1hdXJpY2UudjEuTGlzdFdvcmtzcGFjZXNSZXNwb25zZRI9CgNHZXQSHy5tYXVyaWNlLnYxLkdldFdvcmtzcGFjZVJlcXVlc3QaFS5tYXVyaWNlLnYxLldvcmtzcGFjZRJGCgpQbGFuQ3JlYXRlEiYubWF1cmljZS52MS5QbGFuQ3JlYXRlV29ya3NwYWNlUmVxdWVzdBoQLm1hdXJpY2UudjEuUGxhbhJNChJQbGFuQWRkRW52aXJvbm1lbnQSJS5tYXVyaWNlLnYxLlBsYW5BZGRFbnZpcm9ubWVudFJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SRgoKUGxhbkRlbGV0ZRImLm1hdXJpY2UudjEuUGxhbkRlbGV0ZVdvcmtzcGFjZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW5iBnByb3RvMw", [file_maurice_v1_common]);
 
 /**
  * @generated from message maurice.v1.Workspace
@@ -54,9 +54,11 @@ export type Workspace = Message<"maurice.v1.Workspace"> & {
   home: string;
 
   /**
-   * @generated from field: maurice.v1.Env env = 8;
+   * Environments that exist in this workspace, each with its own network.
+   *
+   * @generated from field: repeated maurice.v1.Env environments = 8;
    */
-  env: Env;
+  environments: Env[];
 
   /**
    * @generated from field: string cpu_slice = 9;
@@ -128,9 +130,11 @@ export type PlanCreateWorkspaceRequest = Message<"maurice.v1.PlanCreateWorkspace
   name: string;
 
   /**
-   * @generated from field: maurice.v1.Env env = 2;
+   * Environments to create with the workspace; empty = dev and prod.
+   *
+   * @generated from field: repeated maurice.v1.Env environments = 2;
    */
-  env: Env;
+  environments: Env[];
 };
 
 /**
@@ -139,6 +143,28 @@ export type PlanCreateWorkspaceRequest = Message<"maurice.v1.PlanCreateWorkspace
  */
 export const PlanCreateWorkspaceRequestSchema: GenMessage<PlanCreateWorkspaceRequest> = /*@__PURE__*/
   messageDesc(file_maurice_v1_workspaces, 4);
+
+/**
+ * @generated from message maurice.v1.PlanAddEnvironmentRequest
+ */
+export type PlanAddEnvironmentRequest = Message<"maurice.v1.PlanAddEnvironmentRequest"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+
+  /**
+   * @generated from field: maurice.v1.Env environment = 2;
+   */
+  environment: Env;
+};
+
+/**
+ * Describes the message maurice.v1.PlanAddEnvironmentRequest.
+ * Use `create(PlanAddEnvironmentRequestSchema)` to create a new message.
+ */
+export const PlanAddEnvironmentRequestSchema: GenMessage<PlanAddEnvironmentRequest> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_workspaces, 5);
 
 /**
  * @generated from message maurice.v1.PlanDeleteWorkspaceRequest
@@ -162,7 +188,7 @@ export type PlanDeleteWorkspaceRequest = Message<"maurice.v1.PlanDeleteWorkspace
  * Use `create(PlanDeleteWorkspaceRequestSchema)` to create a new message.
  */
 export const PlanDeleteWorkspaceRequestSchema: GenMessage<PlanDeleteWorkspaceRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_workspaces, 5);
+  messageDesc(file_maurice_v1_workspaces, 6);
 
 /**
  * @generated from service maurice.v1.Workspaces
@@ -196,6 +222,16 @@ export const Workspaces: GenService<{
   planCreate: {
     methodKind: "unary";
     input: typeof PlanCreateWorkspaceRequestSchema;
+    output: typeof PlanSchema;
+  },
+  /**
+   * scope: plan. Adds an environment (and its network) to an existing workspace.
+   *
+   * @generated from rpc maurice.v1.Workspaces.PlanAddEnvironment
+   */
+  planAddEnvironment: {
+    methodKind: "unary";
+    input: typeof PlanAddEnvironmentRequestSchema;
     output: typeof PlanSchema;
   },
   /**

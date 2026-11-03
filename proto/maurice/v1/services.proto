@@ -42,6 +42,8 @@ message Service {
   // Bytes, 0 = unlimited.
   uint64 memory = 10;
   bool isolated = 11;
+  // Environment the service runs in.
+  Env environment = 12;
 }
 
 message UnitFile {
@@ -87,6 +89,8 @@ message GetStatusRequest {
 
 message ListServicesRequest {
   string workspace_id = 1;
+  // Only this environment; unspecified = all.
+  Env environment = 2;
 }
 message ListServicesResponse {
   repeated Service services = 1;
@@ -131,6 +135,9 @@ message PlanUpsertServiceRequest {
   string project = 2;
   // Full desired definition; `id` and `project_id` are ignored.
   Service service = 3;
+  // Environment to place the service in; falls back to `service.env`, then to the
+  // environment of an existing service with this name.
+  Env environment = 4;
 }
 message RestartRequest {
   string service_id = 1;
