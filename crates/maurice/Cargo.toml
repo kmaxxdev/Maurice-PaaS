@@ -17,8 +17,11 @@ maurice-agent = { workspace = true }
 maurice-core = { workspace = true }
 maurice-quadlet = { workspace = true }
 maurice-db = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
 connectrpc = { workspace = true }
 http = { workspace = true }
+rpassword = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

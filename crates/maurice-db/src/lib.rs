@@ -2,6 +2,9 @@
 //! start. Queries are runtime-checked for now; the compile-time checked
 //! variants come once a CI database exists.
 
+pub mod auth;
+
+pub use auth::{AuditRow, SessionRow, TokenRow, UserRow};
 use serde::{Deserialize, Serialize};
 pub use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;

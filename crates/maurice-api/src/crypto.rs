@@ -11,9 +11,17 @@ pub struct MasterKey {
     cipher: XChaCha20Poly1305,
 }
 
-fn random_bytes(buf: &mut [u8]) -> anyhow::Result<()> {
+/// Fill `buf` from the kernel's random source.
+pub fn random_bytes(buf: &mut [u8]) -> anyhow::Result<()> {
     std::fs::File::open("/dev/urandom")?.read_exact(buf)?;
     Ok(())
+}
+
+/// `n` random bytes as lowercase hex.
+pub fn random_hex(n: usize) -> String {
+    let mut buf = vec![0u8; n];
+    random_bytes(&mut buf).expect("urandom");
+    hex::encode(buf)
 }
 
 impl MasterKey {

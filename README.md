@@ -44,9 +44,10 @@ secrets.
 ```
 sudo install -m 0755 maurice /usr/local/bin/maurice      # from `cargo build --release`
 sudo ln -sf maurice /usr/local/bin/marik
-sudo maurice host prepare                                # PostgreSQL, keys, journald, maurice.service
+sudo maurice host prepare                                # PostgreSQL, keys, journald, maurice.service, first admin
 sudo systemctl enable --now maurice                      # panel on 127.0.0.1:7700
 
+marik login -u admin                                     # password printed by host prepare; stores a CLI token
 marik workspace create shop && marik plan apply <plan-id>   # dev and prod environments, a block of 500 host ports
 ```
 

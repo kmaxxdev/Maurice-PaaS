@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "google/protobuf/timestamp.proto";
+import "maurice/v1/common.proto";
+
+// Roles (ADR-011): viewer reads; operator plans everywhere and applies in dev;
+// admin does everything, including users, tokens and environments.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_ADMIN = 1;
+  ROLE_OPERATOR = 2;
+  ROLE_VIEWER = 3;
+}
+
+message User {
+  string id = 1;
+  string login = 2;
+  Role role = 3;
+  bool disabled = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+  // Also mint an API token for a CLI; its secret comes back in `token`.
+  bool create_token = 3;
+  string token_name = 4;
+}
+message LoginResponse {
+  User user = 1;
+  // Only set when create_token was true; shown once.
+  string token = 2;
+}
+message LogoutRequest {}
+message MeRequest {}
+
+// Metadata of a token; the secret is never listed.
+message TokenInfo {
+  string id = 1;
+  string name = 2;
+  string owner = 3;
+  repeated Scope scopes = 4;
+  repeated string workspace_ids = 5;
+  bool human = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+}
+message CreateTokenRequest {
+  string name = 1;
+  repeated Scope scopes = 2;
+  // Empty = every workspace the owner may see.
+  repeated string workspace_ids = 3;
+  // False for bots: such a token can never apply in prod or staging.
+  bool human = 4;
+  // 0 = never expires.
+  uint32 expires_days = 5;
+}
+message CreateTokenResponse {
+  TokenInfo token = 1;
+  // Shown once.
+  string secret = 2;
+}
+message ListTokensRequest {}
+message ListTokensResponse {
+  repeated TokenInfo tokens = 1;
+}
+message RevokeTokenRequest {
+  string id = 1;
+}
+
+message ListUsersRequest {}
+message ListUsersResponse {
+  repeated User users = 1;
+}
+message CreateUserRequest {
+  string login = 1;
+  string password = 2;
+  Role role = 3;
+}
+message UpdateUserRequest {
+  string id = 1;
+  // Unspecified keeps the current role.
+  Role role = 2;
+  bool disabled = 3;
+  // Empty keeps the current password.
+  string password = 4;
+}
+
+message AuditEntry {
+  string id = 1;
+  google.protobuf.Timestamp at = 2;
+  string principal = 3;
+  string action = 4;
+  string target = 5;
+  string tier = 6;
+  string outcome = 7;
+  string detail = 8;
+}
+message ListAuditRequest {
+  // Newest first; 0 = 100.
+  uint32 limit = 1;
+}
+message ListAuditResponse {
+  repeated AuditEntry entries = 1;
+}
+
+service Auth {
+  // No authentication. Sets the session cookie on success.
+  rpc Login(LoginRequest) returns (LoginResponse);
+  // Ends the session behind the cookie.
+  rpc Logout(LogoutRequest) returns (Empty);
+  // The caller: session user or token owner.
+  rpc Me(MeRequest) returns (User);
+  // Tokens are managed from a browser session by their owner.
+  rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse);
+  rpc ListTokens(ListTokensRequest) returns (ListTokensResponse);
+  rpc RevokeToken(RevokeTokenRequest) returns (Empty);
+  // Users: admin only.
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc CreateUser(CreateUserRequest) returns (User);
+  rpc UpdateUser(UpdateUserRequest) returns (User);
+  // Audit log: operators and admins.
+  rpc ListAudit(ListAuditRequest) returns (ListAuditResponse);
+}

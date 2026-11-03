@@ -10,6 +10,7 @@ fn main() {
         "plans",
         "secrets",
         "projects",
+        "auth",
     ]
     .map(|f| format!("{proto_dir}/maurice/v1/{f}.proto"));
     for f in &files {
