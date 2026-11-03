@@ -3,7 +3,9 @@
 
 use crate::proto::maurice::v1::__buffa::oneof;
 use crate::proto::maurice::v1::*;
-use maurice_db::{EnvVarRow, PortRow, ProjectRow, ServiceFull, ServiceRow, WorkspaceRow};
+use maurice_db::{
+    EnvVarRow, EnvironmentRow, PortRow, ProjectRow, ServiceFull, ServiceRow, WorkspaceRow,
+};
 use std::net::IpAddr;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -18,11 +20,42 @@ fn invalid(msg: impl Into<String>) -> MapError {
     MapError::Invalid(msg.into())
 }
 
+/// Environment name as stored → proto enum.
+pub fn env_to_proto(name: &str) -> Env {
+    match name {
+        "prod" => Env::ENV_PROD,
+        "dev" => Env::ENV_DEV,
+        "staging" => Env::ENV_STAGING,
+        _ => Env::ENV_UNSPECIFIED,
+    }
+}
+
+/// Proto enum → environment name; `None` for unspecified.
+pub fn env_from_proto(e: buffa::EnumValue<Env>) -> Option<&'static str> {
+    match e.as_known() {
+        Some(Env::ENV_PROD) => Some("prod"),
+        Some(Env::ENV_DEV) => Some("dev"),
+        Some(Env::ENV_STAGING) => Some("staging"),
+        _ => None,
+    }
+}
+
+/// Name of the podman secret that carries a panel secret. Secrets of one user share a
+/// namespace, so environment-scoped ones are prefixed with the environment and shared
+/// ones with `ws`.
+pub fn podman_secret_name(environment: Option<&str>, name: &str) -> String {
+    match environment {
+        Some(env) => format!("{env}-{name}"),
+        None => format!("ws-{name}"),
+    }
+}
+
 /// Proto definition → rows. `project_id` is set by the caller; env secret
 /// references are resolved to secret ids by the caller via `secret_ids`.
 pub fn service_from_proto(
     svc: &Service,
     id: Uuid,
+    environment_id: Uuid,
     project_id: Uuid,
     secret_ids: &dyn Fn(&str) -> Option<Uuid>,
 ) -> Result<(ServiceRow, Vec<PortRow>, Vec<EnvVarRow>), MapError> {
@@ -52,6 +85,7 @@ pub fn service_from_proto(
     };
     let row = ServiceRow {
         id,
+        environment_id,
         project_id,
         name: svc.name.clone(),
         kind: kind.into(),
@@ -105,7 +139,7 @@ pub fn service_from_proto(
             Some(oneof::env_var::Value::SecretName(n)) => {
                 let sid = secret_ids(n).ok_or_else(|| {
                     invalid(format!(
-                        "env {}: secret '{n}' does not exist in this workspace",
+                        "env {}: secret '{n}' does not exist in this environment or workspace",
                         e.key
                     ))
                 })?;
@@ -180,11 +214,13 @@ pub fn service_to_proto(
         cpu: s.cpu.unwrap_or(0.0) as f64,
         memory: s.memory_bytes.unwrap_or(0) as u64,
         isolated: s.isolated,
+        environment: env_to_proto(&full.environment).into(),
         ..Default::default()
     }
 }
 
-/// Rows → domain model, for the validator and the renderer.
+/// Rows → domain model, for the validator and the renderer. `secret_name` must
+/// return the podman secret name (see [`podman_secret_name`]).
 pub fn service_to_core(
     full: &ServiceFull,
     secret_name: &dyn Fn(Uuid) -> Option<String>,
@@ -275,8 +311,11 @@ fn default_data_dir(image: Option<&str>) -> String {
     }
 }
 
+/// Rows → domain model of the whole workspace. Projects are workspace-wide; inside
+/// the model each environment lists the projects with its own services.
 pub fn workspace_to_core(
     w: &WorkspaceRow,
+    environments: &[EnvironmentRow],
     projects: &[ProjectRow],
     services: &[ServiceFull],
     secret_name: &dyn Fn(Uuid) -> Option<String>,
@@ -288,22 +327,28 @@ pub fn workspace_to_core(
         subuid_start: w.subuid_start as u32,
         subuid_len: w.subuid_len as u32,
         home: w.home.clone(),
-        env: if w.env == "prod" {
-            maurice_core::Env::Prod
-        } else {
-            maurice_core::Env::Dev
-        },
         cpu_slice: w.cpu_slice.clone(),
-        projects: projects
+        environments: environments
             .iter()
-            .map(|p| maurice_core::Project {
-                name: p.name.clone(),
-                git_repo: p.git_repo.clone(),
-                services: services
-                    .iter()
-                    .filter(|s| s.project.id == p.id)
-                    .map(|s| service_to_core(s, secret_name))
-                    .collect(),
+            .filter_map(|e| {
+                let env = maurice_core::Env::parse(&e.name)?;
+                Some(maurice_core::Environment {
+                    env,
+                    projects: projects
+                        .iter()
+                        .map(|p| maurice_core::Project {
+                            name: p.name.clone(),
+                            git_repo: p.git_repo.clone(),
+                            services: services
+                                .iter()
+                                .filter(|s| {
+                                    s.project.id == p.id && s.service.environment_id == e.id
+                                })
+                                .map(|s| service_to_core(s, secret_name))
+                                .collect(),
+                        })
+                        .collect(),
+                })
             })
             .collect(),
     }

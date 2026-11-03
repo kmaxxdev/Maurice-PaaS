@@ -8,9 +8,17 @@ create table workspaces (
     subuid_start  bigint not null unique,
     subuid_len    integer not null default 65536,
     home          text not null,
-    env           text not null check (env in ('prod', 'dev')),
     cpu_slice     text,
     created_at    timestamptz not null default now()
+);
+
+-- An environment owns a Podman network, services and secrets inside a workspace (ADR-012).
+create table environments (
+    id            uuid primary key,
+    workspace_id  uuid not null references workspaces(id) on delete cascade,
+    name          text not null check (name in ('dev', 'staging', 'prod')),
+    created_at    timestamptz not null default now(),
+    unique (workspace_id, name)
 );
 
 create table projects (
@@ -24,9 +32,10 @@ create table projects (
 );
 
 create table services (
-    id            uuid primary key,
-    project_id    uuid not null references projects(id) on delete cascade,
-    name          text not null check (name ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'),
+    id              uuid primary key,
+    environment_id  uuid not null references environments(id) on delete cascade,
+    project_id      uuid not null references projects(id) on delete cascade,
+    name            text not null check (name ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'),
     kind          text not null check (kind in ('stateless', 'stateful')),
     source_kind   text not null check (source_kind in ('image', 'build')),
     image_ref     text,
@@ -40,9 +49,8 @@ create table services (
     check ((source_kind = 'image' and image_ref is not null) or (source_kind = 'build' and dockerfile is not null))
 );
 
--- Alias uniqueness across a whole workspace (not just a project) is enforced by the validator;
--- Postgres cannot express it as a plain unique index across the join.
-create unique index services_name_per_project on services (project_id, name);
+-- A service name is its network alias, so it is unique per environment (one network each).
+create unique index services_name_per_environment on services (environment_id, name);
 
 create table ports (
     id              uuid primary key,
@@ -67,15 +75,17 @@ create table env_vars (
 );
 
 -- The only table that ever holds a secret value, and only encrypted.
+-- environment_id null = shared by the whole workspace (deploy keys); set = that environment only.
 create table secrets (
     id              uuid primary key,
     workspace_id    uuid not null references workspaces(id) on delete cascade,
+    environment_id  uuid references environments(id) on delete cascade,
     service_id      uuid references services(id) on delete cascade,
     name            text not null,
     encrypted_value bytea not null,
     version         integer not null default 1,
     created_at      timestamptz not null default now(),
-    unique (workspace_id, name, version)
+    unique nulls not distinct (workspace_id, environment_id, name, version)
 );
 
 alter table env_vars add constraint env_vars_secret_fk foreign key (secret_id) references secrets(id) on delete cascade;

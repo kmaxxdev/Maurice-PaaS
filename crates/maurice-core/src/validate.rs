@@ -2,7 +2,7 @@
 //! apply; warnings are shown. No I/O, no guessing: a finding is either
 //! provable from the model or it is not emitted.
 
-use crate::{EnvValue, Workspace};
+use crate::{Env, EnvValue, Environment, Workspace};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -46,13 +46,81 @@ impl Finding {
 /// Validate one workspace in isolation. Cross-workspace checks (host port
 /// conflicts between workspaces) are the planner's job because they need the
 /// other workspaces as input.
+///
+/// Aliases and references live inside an environment (each has its own
+/// network); host ports are shared by the whole workspace.
 pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let names: HashSet<&str> = ws.services().map(|s| s.name.as_str()).collect();
+
+    let mut seen_envs: HashSet<Env> = HashSet::new();
+    for e in &ws.environments {
+        if !seen_envs.insert(e.env) {
+            findings.push(Finding::error(
+                "environment.duplicate",
+                format!("environment:{}", e.env),
+                format!("environment '{}' is declared twice", e.env),
+            ));
+        }
+        validate_environment(ws, e, &mut findings);
+    }
+
+    // Published host ports must not collide anywhere in the workspace.
+    let mut bound: HashMap<String, String> = HashMap::new();
+    for (env, s) in ws.services() {
+        let mut container_ports = HashSet::new();
+        for p in &s.ports {
+            if !container_ports.insert(p.container_port) {
+                findings.push(Finding::error(
+                    "port.duplicate",
+                    format!("port:{}/{}", s.name, p.container_port),
+                    format!("container port {} is declared twice", p.container_port),
+                ));
+            }
+            if let Some(pubd) = p.published {
+                let key = format!("{}:{}", pubd.host_ip, pubd.host_port);
+                let who = format!("{env}/{}", s.name);
+                if let Some(other) = bound.insert(key.clone(), who.clone()) {
+                    findings.push(Finding::error(
+                        "port.conflict",
+                        format!("port:{key}"),
+                        format!("{key} is published by both '{other}' and '{who}'"),
+                    ));
+                }
+                if pubd.host_ip.is_unspecified() {
+                    findings.push(Finding::warning(
+                        "port.public",
+                        format!("port:{key}"),
+                        format!(
+                            "'{}' publishes {} on all interfaces",
+                            s.name, pubd.host_port
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Stateful services without a volume lose their data on every restart.
+    for (_, s) in ws.services() {
+        if s.kind == crate::ServiceKind::Stateful && s.volumes.is_empty() {
+            findings.push(Finding::warning(
+                "service.stateful_without_volume",
+                format!("service:{}", s.name),
+                "stateful service has no volume; its data will not survive a redeploy",
+            ));
+        }
+    }
+
+    findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.target.cmp(&b.target)));
+    findings
+}
+
+fn validate_environment(ws: &Workspace, env: &Environment, findings: &mut Vec<Finding>) {
+    let names: HashSet<&str> = env.services().map(|s| s.name.as_str()).collect();
 
     // Service names are network aliases: unique and DNS-safe.
     let mut seen: HashMap<&str, usize> = HashMap::new();
-    for s in ws.services() {
+    for s in env.services() {
         *seen.entry(s.name.as_str()).or_default() += 1;
         if !is_dns_label(&s.name) {
             findings.push(Finding::error(
@@ -68,15 +136,15 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
                 "service.duplicate_name",
                 format!("service:{name}"),
                 format!(
-                    "{count} services share the alias '{name}' in workspace '{}'",
-                    ws.name
+                    "{count} services share the alias '{name}' in {}/{}",
+                    ws.name, env.env
                 ),
             ));
         }
     }
 
-    // Env references must point at an existing service in this workspace.
-    for s in ws.services() {
+    // Env references must point at an existing service in the same environment.
+    for s in env.services() {
         let mut keys = HashSet::new();
         for e in &s.env {
             if !keys.insert(e.key.as_str()) {
@@ -99,7 +167,10 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
                     Some((target, _)) => findings.push(Finding::error(
                         "env.unresolved_ref",
                         format!("env:{}/{}", s.name, e.key),
-                        format!("reference '{r}' points at unknown service '{target}'"),
+                        format!(
+                            "reference '{r}' points at unknown service '{target}' in {}",
+                            env.env
+                        ),
                     )),
                     None => findings.push(Finding::error(
                         "env.malformed_ref",
@@ -110,55 +181,6 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
             }
         }
     }
-
-    // Published host ports must not collide inside the workspace.
-    let mut bound: HashMap<String, &str> = HashMap::new();
-    for s in ws.services() {
-        let mut container_ports = HashSet::new();
-        for p in &s.ports {
-            if !container_ports.insert(p.container_port) {
-                findings.push(Finding::error(
-                    "port.duplicate",
-                    format!("port:{}/{}", s.name, p.container_port),
-                    format!("container port {} is declared twice", p.container_port),
-                ));
-            }
-            if let Some(pubd) = p.published {
-                let key = format!("{}:{}", pubd.host_ip, pubd.host_port);
-                if let Some(other) = bound.insert(key.clone(), &s.name) {
-                    findings.push(Finding::error(
-                        "port.conflict",
-                        format!("port:{key}"),
-                        format!("{key} is published by both '{other}' and '{}'", s.name),
-                    ));
-                }
-                if pubd.host_ip.is_unspecified() {
-                    findings.push(Finding::warning(
-                        "port.public",
-                        format!("port:{key}"),
-                        format!(
-                            "'{}' publishes {} on all interfaces",
-                            s.name, pubd.host_port
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-
-    // Stateful services without a volume lose their data on every restart.
-    for s in ws.services() {
-        if s.kind == crate::ServiceKind::Stateful && s.volumes.is_empty() {
-            findings.push(Finding::warning(
-                "service.stateful_without_volume",
-                format!("service:{}", s.name),
-                "stateful service has no volume; its data will not survive a redeploy",
-            ));
-        }
-    }
-
-    findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.target.cmp(&b.target)));
-    findings
 }
 
 pub fn has_errors(findings: &[Finding]) -> bool {
@@ -214,6 +236,10 @@ mod tests {
     }
 
     fn ws(services: Vec<Service>) -> Workspace {
+        ws_envs(vec![(Env::Dev, services)])
+    }
+
+    fn ws_envs(envs: Vec<(Env, Vec<Service>)>) -> Workspace {
         Workspace {
             name: "shop".into(),
             unix_user: "ws-shop".into(),
@@ -221,13 +247,18 @@ mod tests {
             subuid_start: 1_000_000,
             subuid_len: 65536,
             home: "/srv/ws/shop".into(),
-            env: Env::Dev,
             cpu_slice: None,
-            projects: vec![Project {
-                name: "storefront".into(),
-                git_repo: None,
-                services,
-            }],
+            environments: envs
+                .into_iter()
+                .map(|(env, services)| Environment {
+                    env,
+                    projects: vec![Project {
+                        name: "storefront".into(),
+                        git_repo: None,
+                        services,
+                    }],
+                })
+                .collect(),
         }
     }
 
@@ -306,6 +337,48 @@ mod tests {
         let f = validate_workspace(&ws(vec![svc("web"), svc("web"), svc("Bad_Name")]));
         assert!(f.iter().any(|x| x.code == "service.duplicate_name"));
         assert!(f.iter().any(|x| x.code == "service.invalid_name"));
+    }
+
+    #[test]
+    fn same_alias_in_two_environments_is_fine_but_refs_stay_inside() {
+        let mut web = svc("web");
+        web.env.push(EnvVar {
+            key: "DATABASE_URL".into(),
+            value: EnvValue::Ref("{{postgres.url}}".into()),
+        });
+        let mut pg = svc("postgres");
+        pg.kind = ServiceKind::Stateful;
+        pg.volumes.push(Volume {
+            source: "data".into(),
+            target: "/var/lib/postgresql".into(),
+            read_only: false,
+        });
+        // prod has both; dev has only web, so its reference dangles.
+        let f = validate_workspace(&ws_envs(vec![
+            (Env::Prod, vec![web.clone(), pg]),
+            (Env::Dev, vec![web]),
+        ]));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].code, "env.unresolved_ref");
+        assert!(f[0].message.contains("in dev"));
+    }
+
+    #[test]
+    fn host_ports_are_shared_across_environments() {
+        let lo = Published {
+            host_ip: Ipv4Addr::LOCALHOST.into(),
+            host_port: 8080,
+        };
+        let mut a = svc("web");
+        a.ports.push(Port {
+            container_port: 80,
+            published: Some(lo),
+        });
+        let f = validate_workspace(&ws_envs(vec![
+            (Env::Dev, vec![a.clone()]),
+            (Env::Prod, vec![a]),
+        ]));
+        assert!(f.iter().any(|x| x.code == "port.conflict"), "{f:?}");
     }
 
     #[test]

@@ -680,18 +680,18 @@ impl Agent for HostAgent {
     async fn container_stats(
         &self,
         user: &UserRef,
-        service: &str,
+        unit_stem: &str,
     ) -> Result<Option<ContainerStats>> {
-        if service.is_empty()
-            || !service
+        if unit_stem.is_empty()
+            || !unit_stem
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         {
             return Err(AgentError::Refused(format!(
-                "invalid service name '{service}'"
+                "invalid unit name '{unit_stem}'"
             )));
         }
-        let label = format!("label=maurice.service={service}");
+        let label = format!("label=maurice.unit={unit_stem}");
         let names = self
             .run_as_user_with_stdin(
                 user,

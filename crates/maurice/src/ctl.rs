@@ -16,7 +16,14 @@ pub enum WorkspaceCommand {
     /// Plan creating a workspace; prints the plan. Apply it with `plan apply`.
     Create {
         name: String,
-        #[arg(long, default_value = "dev")]
+        /// Environments to create: dev, staging, prod. Repeat the flag; default dev and prod.
+        #[arg(long = "env", value_name = "ENV")]
+        envs: Vec<String>,
+    },
+    /// Plan adding an environment (and its network) to a workspace.
+    AddEnv {
+        id: String,
+        /// dev, staging or prod.
         env: String,
     },
     /// Plan deleting a workspace. Destructive.
@@ -31,7 +38,12 @@ pub enum WorkspaceCommand {
 #[derive(Subcommand)]
 pub enum ServiceCommand {
     /// List services of a workspace.
-    List { workspace: String },
+    List {
+        workspace: String,
+        /// Only this environment.
+        #[arg(long)]
+        env: Option<String>,
+    },
     /// Show one service as JSON.
     Get { id: String },
     /// Show the unit file that is on disk for a service.
@@ -59,6 +71,9 @@ pub enum ServiceCommand {
         file: std::path::PathBuf,
         #[arg(long, default_value = "default")]
         project: String,
+        /// Environment to place the service in (required for a new service).
+        #[arg(long)]
+        env: Option<String>,
     },
     /// Plan starting (or restarting) a service from its units.
     Deploy { id: String },
@@ -99,7 +114,13 @@ pub enum SecretCommand {
     /// List secret names and versions of a workspace.
     List { workspace: String },
     /// Set a secret value; reads the value from stdin.
-    Set { workspace: String, name: String },
+    Set {
+        workspace: String,
+        name: String,
+        /// Scope the secret to one environment; without it the secret is shared by the workspace.
+        #[arg(long)]
+        env: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -121,6 +142,24 @@ type Client = HttpClient;
 
 fn config(server: &str) -> anyhow::Result<ClientConfig> {
     Ok(ClientConfig::new(server.parse()?))
+}
+
+fn parse_env(s: &str) -> anyhow::Result<Env> {
+    match s {
+        "dev" => Ok(Env::ENV_DEV),
+        "staging" => Ok(Env::ENV_STAGING),
+        "prod" => Ok(Env::ENV_PROD),
+        other => anyhow::bail!("env must be dev, staging or prod, got {other}"),
+    }
+}
+
+fn env_label(e: Option<Env>) -> &'static str {
+    match e {
+        Some(Env::ENV_DEV) => "dev",
+        Some(Env::ENV_STAGING) => "staging",
+        Some(Env::ENV_PROD) => "prod",
+        _ => "-",
+    }
 }
 
 fn print_json<T: serde::Serialize>(v: &T) -> anyhow::Result<()> {
@@ -182,11 +221,16 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
                 println!("no workspaces");
             }
             for w in &resp.workspaces {
+                let envs: Vec<&str> = w
+                    .environments
+                    .iter()
+                    .map(|e| env_label(e.as_known()))
+                    .collect();
                 println!(
-                    "{:<36} {:<16} {:<5} {:<12} uid {:<6} subuid {}+{}  {}",
+                    "{:<36} {:<16} {:<18} {:<12} uid {:<6} subuid {}+{}  {}",
                     w.id,
                     w.name,
-                    format!("{:?}", w.env).to_lowercase().replace("env_", ""),
+                    envs.join(","),
                     w.unix_user,
                     w.uid,
                     w.subuid_start,
@@ -205,16 +249,26 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
                 .into_owned();
             print_json(&w)?;
         }
-        WorkspaceCommand::Create { name, env } => {
-            let env = match env.as_str() {
-                "prod" => Env::ENV_PROD,
-                "dev" => Env::ENV_DEV,
-                other => anyhow::bail!("env must be prod or dev, got {other}"),
-            };
+        WorkspaceCommand::Create { name, envs } => {
+            let environments = envs
+                .iter()
+                .map(|e| parse_env(e).map(Into::into))
+                .collect::<anyhow::Result<Vec<_>>>()?;
             let p = client
                 .plan_create(PlanCreateWorkspaceRequest {
                     name,
-                    env: env.into(),
+                    environments,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        WorkspaceCommand::AddEnv { id, env } => {
+            let p = client
+                .plan_add_environment(PlanAddEnvironmentRequest {
+                    workspace_id: id,
+                    environment: parse_env(&env)?.into(),
                     ..Default::default()
                 })
                 .await?
@@ -304,10 +358,15 @@ pub async fn plan(cmd: PlanCommand, server: &str, tier: Tier) -> anyhow::Result<
 pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::Result<()> {
     let client = ServicesClient::new(Client::plaintext(), config(server)?);
     match cmd {
-        ServiceCommand::List { workspace } => {
+        ServiceCommand::List { workspace, env } => {
+            let environment = match env {
+                Some(e) => parse_env(&e)?.into(),
+                None => Env::ENV_UNSPECIFIED.into(),
+            };
             let resp = client
                 .list(ListServicesRequest {
                     workspace_id: workspace,
+                    environment,
                     ..Default::default()
                 })
                 .await?
@@ -333,8 +392,9 @@ pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::
                     })
                     .collect();
                 println!(
-                    "{:<36} {:<14} {:<10} {:<40} ports {}",
+                    "{:<36} {:<8} {:<14} {:<10} {:<40} ports {}",
                     s.id,
+                    env_label(s.environment.as_known()),
                     s.name,
                     format!("{:?}", s.kind)
                         .to_lowercase()
@@ -432,14 +492,20 @@ pub async fn service(cmd: ServiceCommand, server: &str, _tier: Tier) -> anyhow::
             workspace,
             file,
             project,
+            env,
         } => {
             let text = std::fs::read_to_string(&file)?;
             let svc: Service = serde_json::from_str(&text)?;
+            let environment = match env {
+                Some(e) => parse_env(&e)?.into(),
+                None => Env::ENV_UNSPECIFIED.into(),
+            };
             let p = client
                 .plan_upsert(PlanUpsertServiceRequest {
                     workspace_id: workspace,
                     project,
                     service: svc.into(),
+                    environment,
                     ..Default::default()
                 })
                 .await?
@@ -504,10 +570,22 @@ pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Re
                 println!("no secrets");
             }
             for s in &resp.secrets {
-                println!("{:<36} {:<24} v{}", s.id, s.name, s.version);
+                let scope = match s.environment.as_known() {
+                    Some(Env::ENV_UNSPECIFIED) | None => "shared",
+                    _ => env_label(s.environment.as_known()),
+                };
+                println!("{:<36} {:<8} {:<24} v{}", s.id, scope, s.name, s.version);
             }
         }
-        SecretCommand::Set { workspace, name } => {
+        SecretCommand::Set {
+            workspace,
+            name,
+            env,
+        } => {
+            let environment = match env {
+                Some(e) => parse_env(&e)?.into(),
+                None => Env::ENV_UNSPECIFIED.into(),
+            };
             use std::io::Read;
             let mut value = Vec::new();
             std::io::stdin().read_to_end(&mut value)?;
@@ -519,6 +597,7 @@ pub async fn secret(cmd: SecretCommand, server: &str, _tier: Tier) -> anyhow::Re
                     workspace_id: workspace,
                     name: name.clone(),
                     value: value.into(),
+                    environment,
                     ..Default::default()
                 })
                 .await?

@@ -4,11 +4,13 @@ package maurice.v1;
 
 import "google/protobuf/timestamp.proto";
 
-// Workspace environment. Prod workspaces never accept apply from non-human tokens.
+// An environment inside a workspace: its own network, services and secrets.
+// Prod and staging never accept apply from non-human tokens.
 enum Env {
   ENV_UNSPECIFIED = 0;
   ENV_PROD = 1;
   ENV_DEV = 2;
+  ENV_STAGING = 3;
 }
 
 // Deploy strategy follows from the kind: stateless services roll blue-green,

@@ -164,37 +164,44 @@ async fn apply_workspace(
     only: &[String],
     start: bool,
 ) -> anyhow::Result<Vec<String>> {
-    let net = maurice_quadlet::render_network(ws);
-    agent.write_unit(user, &net.file_name, &net.content).await?;
     let mut services = Vec::new();
-    for svc in ws.services() {
-        if !only.is_empty() && !only.iter().any(|o| o == &svc.name) {
-            continue;
-        }
-        let image = match &svc.source {
-            maurice_core::Source::Image { reference } => reference.clone(),
-            maurice_core::Source::Build { .. } => {
-                anyhow::bail!(
-                    "service {} needs a build; builds are not wired yet",
-                    svc.name
-                )
+    for environment in &ws.environments {
+        let env = environment.env;
+        let net = maurice_quadlet::render_network(ws, env);
+        agent.write_unit(user, &net.file_name, &net.content).await?;
+        for svc in environment.services() {
+            if !only.is_empty() && !only.iter().any(|o| o == &svc.name) {
+                continue;
             }
-        };
-        for v in maurice_quadlet::render_volumes(svc) {
-            agent.write_unit(user, &v.file_name, &v.content).await?;
+            let image = match &svc.source {
+                maurice_core::Source::Image { reference } => reference.clone(),
+                maurice_core::Source::Build { .. } => {
+                    anyhow::bail!(
+                        "service {} needs a build; use the panel for build sources",
+                        svc.name
+                    )
+                }
+            };
+            for v in maurice_quadlet::render_volumes(env, svc) {
+                agent.write_unit(user, &v.file_name, &v.content).await?;
+            }
+            let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
+                workspace: ws,
+                env,
+                service: svc,
+                image: &image,
+                version: "dev",
+                resolve_ref: &|r| resolve_ref(environment, r),
+                enabled: true,
+            })?;
+            agent
+                .write_unit(user, &unit.file_name, &unit.content)
+                .await?;
+            services.push(format!(
+                "{}.service",
+                maurice_quadlet::unit_stem(env, &svc.name)
+            ));
         }
-        let unit = maurice_quadlet::render_container(&maurice_quadlet::RenderInput {
-            workspace: ws,
-            service: svc,
-            image: &image,
-            version: "dev",
-            resolve_ref: &|r| resolve_ref(ws, r),
-            enabled: true,
-        })?;
-        agent
-            .write_unit(user, &unit.file_name, &unit.content)
-            .await?;
-        services.push(format!("{}.service", svc.name));
     }
     agent.daemon_reload(user).await?;
     if start {
@@ -210,9 +217,9 @@ async fn apply_workspace(
 
 /// Alpha resolver: `{{svc.host}}` → alias, `{{svc.port}}` → first container port,
 /// `{{svc.url}}` for postgres → a connection string using the admin secret name.
-fn resolve_ref(ws: &maurice_core::Workspace, r: &str) -> Option<String> {
+fn resolve_ref(env: &maurice_core::Environment, r: &str) -> Option<String> {
     let (svc_name, field) = maurice_core::validate::parse_ref(r)?;
-    let svc = ws.services().find(|s| s.name == svc_name)?;
+    let svc = env.services().find(|s| s.name == svc_name)?;
     match field {
         "host" => Some(svc.name.clone()),
         "port" => svc.ports.first().map(|p| p.container_port.to_string()),
@@ -254,41 +261,43 @@ async fn selftest(
             subuid_start,
             subuid_len: 65536,
             home: home.clone(),
-            env: maurice_core::Env::Dev,
             cpu_slice: None,
-            projects: vec![maurice_core::Project {
-                name: "selftest".into(),
-                git_repo: None,
-                services: vec![maurice_core::Service {
-                    name: "postgres".into(),
-                    kind: maurice_core::ServiceKind::Stateful,
-                    source: maurice_core::Source::Image {
-                        reference: "docker.io/library/postgres:16".into(),
-                    },
-                    ports: vec![maurice_core::Port {
-                        container_port: 5432,
-                        published: None,
+            environments: vec![maurice_core::Environment {
+                env: maurice_core::Env::Dev,
+                projects: vec![maurice_core::Project {
+                    name: "selftest".into(),
+                    git_repo: None,
+                    services: vec![maurice_core::Service {
+                        name: "postgres".into(),
+                        kind: maurice_core::ServiceKind::Stateful,
+                        source: maurice_core::Source::Image {
+                            reference: "docker.io/library/postgres:16".into(),
+                        },
+                        ports: vec![maurice_core::Port {
+                            container_port: 5432,
+                            published: None,
+                        }],
+                        env: vec![maurice_core::EnvVar {
+                            key: "POSTGRES_PASSWORD".into(),
+                            value: maurice_core::EnvValue::Secret("pg_admin".into()),
+                        }],
+                        volumes: vec![maurice_core::Volume {
+                            source: "data".into(),
+                            target: "/var/lib/postgresql/data".into(),
+                            read_only: false,
+                        }],
+                        resources: maurice_core::Resources::default(),
+                        isolated: false,
+                        health_cmd: Some("pg_isready -U postgres".into()),
                     }],
-                    env: vec![maurice_core::EnvVar {
-                        key: "POSTGRES_PASSWORD".into(),
-                        value: maurice_core::EnvValue::Secret("pg_admin".into()),
-                    }],
-                    volumes: vec![maurice_core::Volume {
-                        source: "data".into(),
-                        target: "/var/lib/postgresql/data".into(),
-                        read_only: false,
-                    }],
-                    resources: maurice_core::Resources::default(),
-                    isolated: false,
-                    health_cmd: Some("pg_isready -U postgres".into()),
                 }],
             }],
         };
         let units = apply_workspace(agent, &u, &ws, &[], false).await?;
         for f in [
-            "selftest-net.network",
-            "postgres-data.volume",
-            "postgres.container",
+            "selftest-dev.network",
+            "dev-postgres-data.volume",
+            "dev-postgres.container",
         ] {
             anyhow::ensure!(
                 agent.read_unit(&u, f).await?.is_some(),

@@ -89,11 +89,11 @@ pub trait Agent: Send + Sync {
         after_cursor: Option<&str>,
     ) -> Result<Vec<JournalLine>>;
 
-    // --- resource usage of the running container of a service (by label) ---
+    // --- resource usage of the running container of a unit (`maurice.unit` label) ---
     async fn container_stats(
         &self,
         user: &UserRef,
-        service: &str,
+        unit_stem: &str,
     ) -> Result<Option<ContainerStats>>;
 
     // --- clone a repository and build an image, both as the workspace user ---
@@ -314,7 +314,7 @@ impl Agent for DryRunAgent {
     async fn container_stats(
         &self,
         _user: &UserRef,
-        _service: &str,
+        _unit_stem: &str,
     ) -> Result<Option<ContainerStats>> {
         Ok(None)
     }

@@ -9,6 +9,7 @@ import type { Service, ServiceStatus } from "../gen/maurice/v1/services_pb";
 import { workspaces, services, secrets, projects, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
 import { ServiceForm } from "../components/ServiceForm";
+import { ENV_ORDER, envLabel, envTone } from "../env";
 
 const exampleService = JSON.stringify(
   {
@@ -46,8 +47,13 @@ export function Workspace() {
   const [json, setJson] = createSignal(exampleService);
   const [advanced, setAdvanced] = createSignal(false);
   const [project, setProject] = createSignal("default");
+  const [targetEnv, setTargetEnv] = createSignal<Env>(Env.UNSPECIFIED);
+  // The environment new services go to: the chosen one, else the first the workspace has.
+  const envForNew = () => (targetEnv() !== Env.UNSPECIFIED ? targetEnv() : ws()?.environments[0] ?? Env.UNSPECIFIED);
+  const missingEnvs = () => ENV_ORDER.filter((e) => !(ws()?.environments ?? []).includes(e));
   const [secretName, setSecretName] = createSignal("");
   const [secretValue, setSecretValue] = createSignal("");
+  const [secretEnv, setSecretEnv] = createSignal<Env>(Env.UNSPECIFIED);
   const [secretMsg, setSecretMsg] = createSignal("");
   const [projectList, { refetch: refetchProjects }] = createResource(() => params.id, async (id) => (await projects.list({ workspaceId: id })).projects);
   const [prName, setPrName] = createSignal("default");
@@ -82,7 +88,16 @@ export function Workspace() {
   async function planUpsert(svc: Service) {
     setError("");
     try {
-      setPlan(await services.planUpsert({ workspaceId: params.id, project: project(), service: svc }));
+      setPlan(await services.planUpsert({ workspaceId: params.id, project: project(), service: svc, environment: envForNew() }));
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  async function planAddEnv(e: Env) {
+    setError("");
+    try {
+      setPlan(await workspaces.planAddEnvironment({ workspaceId: params.id, environment: e }));
     } catch (err) {
       setError(errorText(err));
     }
@@ -92,8 +107,8 @@ export function Workspace() {
     e.preventDefault();
     setSecretMsg("");
     try {
-      const info = await secrets.set({ workspaceId: params.id, name: secretName(), value: new TextEncoder().encode(secretValue()) });
-      setSecretMsg(`${info.name} stored as version ${info.version}`);
+      const info = await secrets.set({ workspaceId: params.id, name: secretName(), value: new TextEncoder().encode(secretValue()), environment: secretEnv() });
+      setSecretMsg(`${info.name} (${envLabel(info.environment)}) stored as version ${info.version}`);
       setSecretName("");
       setSecretValue("");
       refetchSecrets();
@@ -117,9 +132,10 @@ export function Workspace() {
         <A href="/" class="muted">workspaces</A>
         <span class="muted">/</span>
         <h2>{ws()?.name ?? "…"}</h2>
-        <Show when={ws()}>{(w) => <span class={`pill ${w().env === Env.PROD ? "warn" : ""}`}>{w().env === Env.PROD ? "prod" : "dev"}</span>}</Show>
+        <For each={ws()?.environments ?? []}>{(e) => <span class={`pill ${envTone(e)}`}>{envLabel(e)}</span>}</For>
         <span class="muted small mono">{ws()?.unixUser} · uid {ws()?.uid}</span>
         <span style={{ "margin-left": "auto" }} />
+        <For each={missingEnvs()}>{(e) => <button onClick={() => planAddEnv(e)}>Add {envLabel(e)}</button>}</For>
         <button onClick={() => { refetch(); refetchStatus(); }}>Refresh</button>
         <button class="danger" onClick={planDelete}>Delete workspace</button>
       </div>
@@ -127,12 +143,18 @@ export function Workspace() {
         <p class="error small">{error()}</p>
       </Show>
 
+      <Show when={!list.loading} fallback={<p class="muted">Loading…</p>}>
+      <For each={ws()?.environments ?? []}>
+        {(env) => (
       <div class="section">
-        <h2>Services</h2>
-        <Show when={!list.loading} fallback={<p class="muted">Loading…</p>}>
-          <Show when={list()?.length} fallback={<div class="empty">No services. Add one below: the plan shows the unit file before anything is written.</div>}>
+        <div class="row">
+          <h2>Services</h2>
+          <span class={`pill ${envTone(env)}`}>{envLabel(env)}</span>
+          <span class="muted small mono">network {ws()?.name}-{envLabel(env)}</span>
+        </div>
+          <Show when={list()?.some((s) => s.environment === env)} fallback={<div class="empty">No services in {envLabel(env)}. Add one below: the plan shows the unit file before anything is written.</div>}>
             <div class="grid">
-              <For each={list()}>
+              <For each={list()?.filter((s) => s.environment === env)}>
                 {(s) => {
                   const st = () => statuses()?.[s.id];
                   return (
@@ -155,12 +177,20 @@ export function Workspace() {
               </For>
             </div>
           </Show>
-        </Show>
       </div>
+        )}
+      </For>
+      </Show>
 
       <div class="section card">
         <div class="row" style={{ "margin-bottom": "10px" }}>
           <h2>Add or replace a service</h2>
+          <label style={{ "flex-direction": "row", display: "flex", gap: "6px", "align-items": "center" }}>
+            Environment
+            <select id="svc-env" value={String(envForNew())} onChange={(e) => setTargetEnv(Number(e.currentTarget.value) as Env)}>
+              <For each={ws()?.environments ?? []}>{(e) => <option value={String(e)}>{envLabel(e)}</option>}</For>
+            </select>
+          </label>
           <label style={{ "flex-direction": "row", display: "flex", gap: "6px", "align-items": "center" }}>
             Project
             <input id="svc-project" value={project()} onInput={(e) => setProject(e.currentTarget.value)} pattern="[a-z0-9-]+" style={{ width: "120px" }} />
@@ -168,9 +198,9 @@ export function Workspace() {
           <span style={{ "margin-left": "auto" }} />
           <button type="button" onClick={() => setAdvanced(!advanced())}>{advanced() ? "Simple form" : "JSON"}</button>
         </div>
-        <Show when={advanced()} fallback={<ServiceForm secretNames={secretList()?.map((s) => s.name)} onSubmit={planUpsert} />}>
+        <Show when={advanced()} fallback={<ServiceForm secretNames={secretList()?.filter((s) => s.environment === Env.UNSPECIFIED || s.environment === envForNew()).map((s) => s.name)} onSubmit={planUpsert} />}>
           <form onSubmit={planUpsertJson} style={{ display: "grid", gap: "10px" }}>
-            <span class="muted small">Definition in the API's JSON shape. Secret names must exist in this workspace first.</span>
+            <span class="muted small">Definition in the API's JSON shape. Secret names must exist in the target environment (or be shared) first.</span>
             <textarea id="svc-json" class="mono" value={json()} onInput={(e) => setJson(e.currentTarget.value)} spellcheck={false} />
             <div class="row">
               <button class="primary" type="submit">Plan</button>
@@ -216,15 +246,23 @@ export function Workspace() {
 
       <div class="section card">
         <h2 style={{ "margin-bottom": "10px" }}>Secrets</h2>
+        <p class="muted small" style={{ margin: "0 0 8px" }}>Shared secrets are visible to every environment (deploy keys live here); environment secrets override them by name, so staging can hold real provider keys that dev never sees.</p>
         <Show when={secretList()?.length} fallback={<p class="muted small">No secrets. Values are encrypted at rest and only ever referenced by name in units.</p>}>
           <table>
-            <thead><tr><th>Name</th><th>Version</th><th>Id</th></tr></thead>
+            <thead><tr><th>Scope</th><th>Name</th><th>Version</th><th>Id</th></tr></thead>
             <tbody>
-              <For each={secretList()}>{(s) => <tr><td><code>{s.name}</code></td><td>v{s.version}</td><td class="muted mono small">{s.id}</td></tr>}</For>
+              <For each={secretList()}>{(s) => <tr><td><span class={`pill ${envTone(s.environment)}`}>{envLabel(s.environment)}</span></td><td><code>{s.name}</code></td><td>v{s.version}</td><td class="muted mono small">{s.id}</td></tr>}</For>
             </tbody>
           </table>
         </Show>
         <form class="inline" onSubmit={setSecret} style={{ "margin-top": "10px" }}>
+          <label>
+            Scope
+            <select id="secret-env" value={String(secretEnv())} onChange={(e) => setSecretEnv(Number(e.currentTarget.value) as Env)}>
+              <option value={String(Env.UNSPECIFIED)}>shared</option>
+              <For each={ws()?.environments ?? []}>{(e) => <option value={String(e)}>{envLabel(e)}</option>}</For>
+            </select>
+          </label>
           <label>
             Name
             <input id="secret-name" value={secretName()} onInput={(e) => setSecretName(e.currentTarget.value)} placeholder="pg_admin" required pattern="[A-Za-z0-9_.-]+" />

@@ -1,12 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
-/// Workspace environment. Prod workspaces never accept `apply` from non-human tokens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// An environment inside a workspace. Each has its own network, services and
+/// secrets. Prod and staging never accept `apply` from non-human tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Env {
-    Prod,
     Dev,
+    Staging,
+    Prod,
+}
+
+impl Env {
+    pub const ALL: [Env; 3] = [Env::Dev, Env::Staging, Env::Prod];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Env::Dev => "dev",
+            Env::Staging => "staging",
+            Env::Prod => "prod",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Env> {
+        match s {
+            "dev" => Some(Env::Dev),
+            "staging" => Some(Env::Staging),
+            "prod" => Some(Env::Prod),
+            _ => None,
+        }
+    }
+
+    /// Environments where changes must come from a human (ADR-011, ADR-012).
+    pub fn human_only(self) -> bool {
+        matches!(self, Env::Staging | Env::Prod)
+    }
+}
+
+impl std::fmt::Display for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Deploy strategy follows from the kind.
@@ -19,7 +53,8 @@ pub enum ServiceKind {
     Stateful,
 }
 
-/// A workspace is a system user with its own rootless Podman, network and home.
+/// A workspace is a system user with its own rootless Podman and home. It owns
+/// one or more environments, each with a network of its own (ADR-012).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     pub name: String,
@@ -28,23 +63,43 @@ pub struct Workspace {
     pub subuid_start: u32,
     pub subuid_len: u32,
     pub home: String,
-    pub env: Env,
     pub cpu_slice: Option<String>,
-    pub projects: Vec<Project>,
+    pub environments: Vec<Environment>,
 }
 
 impl Workspace {
-    /// Name of the workspace-wide Podman network (and its Quadlet unit stem).
-    pub fn network_name(&self) -> String {
-        format!("{}-net", self.name)
+    pub fn environment(&self, env: Env) -> Option<&Environment> {
+        self.environments.iter().find(|e| e.env == env)
     }
 
+    /// Every service in every environment, with the environment it belongs to.
+    pub fn services(&self) -> impl Iterator<Item = (Env, &Service)> {
+        self.environments
+            .iter()
+            .flat_map(|e| e.services().map(move |s| (e.env, s)))
+    }
+
+    /// Name of an environment's Podman network (and its Quadlet unit stem).
+    pub fn network_name(&self, env: Env) -> String {
+        format!("{}-{env}", self.name)
+    }
+}
+
+/// One environment of a workspace: a network and the services in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Environment {
+    pub env: Env,
+    pub projects: Vec<Project>,
+}
+
+impl Environment {
     pub fn services(&self) -> impl Iterator<Item = &Service> {
         self.projects.iter().flat_map(|p| p.services.iter())
     }
 }
 
-/// Groups the services of one repository.
+/// Groups the services of one repository. A project is shared by the
+/// environments of a workspace; here it carries the services of one environment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
@@ -64,7 +119,7 @@ pub enum Source {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Service {
-    /// Stable network alias inside the workspace. Unique per workspace.
+    /// Stable network alias inside the environment. Unique per environment.
     pub name: String,
     pub kind: ServiceKind,
     pub source: Source,
@@ -81,7 +136,7 @@ pub struct Service {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Port {
     pub container_port: u16,
-    /// Nothing is reachable from outside the workspace network unless published.
+    /// Nothing is reachable from outside the environment network unless published.
     pub published: Option<Published>,
 }
 
@@ -110,7 +165,7 @@ pub enum EnvValue {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Volume {
-    /// Named volume (`<service>-<name>.volume`) or a host path when it starts with `/`.
+    /// Named volume (`<env>-<service>-<name>.volume`) or a host path when it starts with `/`.
     pub source: String,
     pub target: String,
     pub read_only: bool,
