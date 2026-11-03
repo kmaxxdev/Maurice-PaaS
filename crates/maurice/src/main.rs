@@ -85,6 +85,11 @@ enum Command {
         #[command(subcommand)]
         command: ctl::ProjectCommand,
     },
+    /// Routes and domains on the edges (through the panel).
+    Route {
+        #[command(subcommand)]
+        command: ctl::RouteCommand,
+    },
     /// Render the Quadlet units a workspace definition would produce, without touching the host.
     Render {
         /// Path to a workspace definition (JSON).
@@ -164,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Service { command } => ctl::service(command, &cli.server, tier).await?,
         Command::Secret { command } => ctl::secret(command, &cli.server, tier).await?,
         Command::Project { command } => ctl::project(command, &cli.server, tier).await?,
+        Command::Route { command } => ctl::route(command, &cli.server, tier).await?,
         Command::Serve {
             listen,
             database_url,
@@ -205,6 +211,15 @@ async fn main() -> anyhow::Result<()> {
             {
                 state.port_range = maurice_api::services::parse_port_range(&range)?;
             }
+            state.internal_addr = std::env::var("MAURICE_INTERNAL_ADDR")
+                .ok()
+                .or_else(|| read_env_file_var("/etc/maurice/maurice.env", "MAURICE_INTERNAL_ADDR"))
+                .map(|a| a.parse())
+                .transpose()?;
+            state.acme_email = std::env::var("MAURICE_ACME_EMAIL")
+                .ok()
+                .or_else(|| read_env_file_var("/etc/maurice/maurice.env", "MAURICE_ACME_EMAIL"))
+                .filter(|e| !e.is_empty());
             tracing::info!(
                 range = format!("{}-{}", state.port_range.0, state.port_range.1),
                 "workspace port blocks"

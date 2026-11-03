@@ -3,8 +3,10 @@
 //! variants come once a CI database exists.
 
 pub mod auth;
+pub mod edge;
 
 pub use auth::{AuditRow, SessionRow, TokenRow, UserRow};
+pub use edge::{DomainRow, HostDomain, RouteFull, RouteRow};
 use serde::{Deserialize, Serialize};
 pub use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -333,6 +335,8 @@ pub struct ServiceFull {
     pub environment: String,
     pub ports: Vec<PortRow>,
     pub env: Vec<EnvVarRow>,
+    /// Edge routes of this service with their domains.
+    pub routes: Vec<(RouteRow, Vec<DomainRow>)>,
 }
 
 impl Store {
@@ -468,12 +472,29 @@ impl Store {
         .bind(s.id)
         .fetch_all(&self.pool)
         .await?;
+        let route_rows = sqlx::query_as::<_, RouteRow>(
+            "select * from routes where service_id = $1 order by block_port",
+        )
+        .bind(s.id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut routes = Vec::with_capacity(route_rows.len());
+        for r in route_rows {
+            let domains = sqlx::query_as::<_, DomainRow>(
+                "select * from domains where route_id = $1 order by name",
+            )
+            .bind(r.id)
+            .fetch_all(&self.pool)
+            .await?;
+            routes.push((r, domains));
+        }
         Ok(ServiceFull {
             service: s,
             project,
             environment,
             ports,
             env,
+            routes,
         })
     }
 

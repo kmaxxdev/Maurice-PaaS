@@ -67,6 +67,31 @@ create table ports (
     check ((published and host_ip is not null and host_port is not null) or (not published and host_ip is null and host_port is null))
 );
 
+-- Routes on the workspace edge (ADR-009): a block port that proxies to a container port.
+create table routes (
+    id              uuid primary key,
+    workspace_id    uuid not null references workspaces(id) on delete cascade,
+    environment_id  uuid not null references environments(id) on delete cascade,
+    service_id      uuid not null references services(id) on delete cascade,
+    container_port  integer not null check (container_port between 1 and 65535),
+    block_port      integer not null check (block_port between 1024 and 65535),
+    visibility      text not null check (visibility in ('public', 'internal')),
+    created_at      timestamptz not null default now(),
+    unique (workspace_id, block_port),
+    -- A container port may be exposed once publicly and once internally.
+    unique (service_id, container_port, visibility)
+);
+
+-- Domains the host edge attaches to public routes.
+create table domains (
+    id          uuid primary key,
+    route_id    uuid not null references routes(id) on delete cascade,
+    name        text not null unique,
+    public_ip   text,
+    tls_mode    text not null check (tls_mode in ('auto', 'internal', 'off')),
+    created_at  timestamptz not null default now()
+);
+
 create table env_vars (
     id          uuid primary key,
     service_id  uuid not null references services(id) on delete cascade,

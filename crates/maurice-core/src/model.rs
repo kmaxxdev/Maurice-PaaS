@@ -74,6 +74,17 @@ impl PortBlock {
     pub fn contains(&self, port: u16) -> bool {
         port >= self.start && port <= self.end()
     }
+
+    /// The workspace edge's own listener: the last port of the block, never handed
+    /// to a service.
+    pub fn edge_port(&self) -> u16 {
+        self.end()
+    }
+
+    /// Ports services may bind: the block without the edge's reserved port.
+    pub fn usable(&self) -> std::ops::RangeInclusive<u16> {
+        self.start..=self.end() - 1
+    }
 }
 
 impl std::fmt::Display for PortBlock {
@@ -162,6 +173,84 @@ pub struct Service {
     pub isolated: bool,
     /// Health check command run inside the container; enables `Notify=healthy`.
     pub health_cmd: Option<String>,
+    /// HTTP routes on the workspace edge ("expose" in the panel, ADR-009).
+    #[serde(default)]
+    pub routes: Vec<Route>,
+}
+
+/// Who may reach a route: the internet through the host edge, or other
+/// workspaces on the internal host address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Visibility {
+    Public,
+    Internal,
+}
+
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Visibility::Public => "public",
+            Visibility::Internal => "internal",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Visibility> {
+        match s {
+            "public" => Some(Visibility::Public),
+            "internal" => Some(Visibility::Internal),
+            _ => None,
+        }
+    }
+}
+
+/// A route on the workspace edge: a block port that proxies to a container port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Route {
+    pub container_port: u16,
+    /// Host port inside the workspace block the edge listens on.
+    pub block_port: u16,
+    pub visibility: Visibility,
+    /// Domains the host edge attaches to this route (public routes only).
+    #[serde(default)]
+    pub domains: Vec<Domain>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Domain {
+    pub name: String,
+    /// Public address to listen on; `None` = every address.
+    pub public_ip: Option<IpAddr>,
+    pub tls: TlsMode,
+}
+
+/// How the host edge serves a domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TlsMode {
+    /// Certificates from a public CA (HTTP-01); plain HTTP redirects.
+    Auto,
+    /// Caddy's internal CA; for test hosts without public DNS.
+    Internal,
+    /// Plain HTTP only.
+    Off,
+}
+
+impl TlsMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TlsMode::Auto => "auto",
+            TlsMode::Internal => "internal",
+            TlsMode::Off => "off",
+        }
+    }
+    pub fn parse(s: &str) -> Option<TlsMode> {
+        match s {
+            "auto" => Some(TlsMode::Auto),
+            "internal" => Some(TlsMode::Internal),
+            "off" => Some(TlsMode::Off),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

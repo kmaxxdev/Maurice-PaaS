@@ -10,6 +10,7 @@ import { workspaces, services, errorText } from "../api";
 import { PlanDialog } from "../components/PlanDialog";
 import { ServiceForm } from "../components/ServiceForm";
 import { Sparkline, Meter } from "../components/Sparkline";
+import { Expose } from "../components/Expose";
 import { envLabel, envTone } from "../env";
 import { onCleanup, createEffect } from "solid-js";
 import { stateTone } from "./Workspace";
@@ -87,6 +88,7 @@ export function ServiceView() {
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal("");
   const [json, setJson] = createSignal<string | null>(null);
+  const [exposeKey, setExposeKey] = createSignal(0);
 
   const definitionJson = () => json() ?? (svc() ? JSON.stringify(toJson(ServiceSchema, svc()!), null, 2) : "");
 
@@ -225,6 +227,7 @@ export function ServiceView() {
                     </table>
                   </Show>
                 </div>
+                <Expose service={s()} workspaceId={params.wsId ?? ""} onPlan={setPlan} refreshKey={exposeKey()} />
                 <div class="card">
                   <h3>Resources</h3>
                   <table>
@@ -312,7 +315,7 @@ export function ServiceView() {
         onClose={() => setPlan(null)}
         onApplied={() => {
           if (plan()?.changes.some((c) => c.kind === 4 /* REMOVE_UNIT */)) navigate(`/ws/${params.wsId}`);
-          else refreshAll();
+          else { refreshAll(); setExposeKey((k) => k + 1); }
         }}
       />
     </>

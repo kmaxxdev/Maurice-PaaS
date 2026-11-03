@@ -1415,6 +1415,7 @@ name = "maurice-quadlet"
 version = "0.1.0"
 dependencies = [
  "maurice-core",
+ "serde_json",
 ]
 
 [[package]]

@@ -78,6 +78,24 @@ marik service unit <svc-id>  /  marik service logs <svc-id> [--follow]  /  marik
 maurice service delete <svc-id>  &&  maurice plan apply <plan-id> --confirm
 ```
 
+Edge (ADR-009): `host prepare` installs the host edge (`maurice-edge.service`, rootful Caddy on 80/443,
+config in `/etc/maurice/edge/host.json`) and the internal address `10.200.0.1` on `maurice0`.
+A workspace gets its own edge (`edge.container`, rootless Caddy on every environment network,
+publishing the port block) when its first route is exposed:
+
+```
+marik route expose <svc-id> --port 80 --domain shop.example.com [--tls auto|internal|off]
+marik route expose <svc-id> --port 8080 --internal       # other workspaces reach it on 10.200.0.1:<block port>
+marik route list <ws>  /  marik route status <ws>
+marik route add-domain <route-id> www.shop.example.com  /  marik route remove-domain <domain-id>
+marik route unexpose <route-id>
+```
+
+The panel writes `~/edge/edge.json` for the workspace edge and reloads it through
+`podman exec edge caddy reload`; the host edge is reloaded the same way as root. Redeploys
+reload the workspace edge so routes follow the new container name. Ports a service publishes
+directly are carved out of the edge's ranges.
+
 Roles: `viewer` reads, `operator` plans everywhere and applies in `dev`, `admin` does everything
 including users, tokens and environments. Apply in `prod` and `staging` needs an admin behind a
 human token; tokens for bots are created with "human" off. Every state change writes an audit row
