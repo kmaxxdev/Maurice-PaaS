@@ -98,6 +98,61 @@ pub trait Agent: Send + Sync {
 
     // --- clone a repository and build an image, both as the workspace user ---
     async fn build_image(&self, user: &UserRef, spec: &BuildSpec) -> Result<BuildResult>;
+
+    // --- files in the workspace home outside the quadlet dir (edge config), relative paths ---
+    async fn write_user_file(&self, user: &UserRef, rel_path: &str, content: &str) -> Result<()>;
+    async fn read_user_file(&self, user: &UserRef, rel_path: &str) -> Result<Option<String>>;
+
+    // --- run a command inside a running container of the workspace user ---
+    async fn podman_exec(&self, user: &UserRef, container: &str, args: &[&str]) -> Result<String>;
+
+    // --- the host edge: files under /etc/maurice and a rootful container ---
+    async fn write_host_file(&self, path: &str, content: &str) -> Result<()>;
+    async fn read_host_file(&self, path: &str) -> Result<Option<String>>;
+    async fn podman_exec_root(&self, container: &str, args: &[&str]) -> Result<String>;
+}
+
+/// Relative paths the panel may write in a workspace home: a single directory level
+/// under `edge/`, plain file names.
+pub fn validate_user_rel_path(rel: &str) -> Result<()> {
+    let ok = rel.starts_with("edge/")
+        && rel.len() > 5
+        && !rel.contains("..")
+        && rel
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'.' || b == b'-' || b == b'_')
+        && rel.matches('/').count() == 1;
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!("invalid file path '{rel}'")))
+    }
+}
+
+/// Host files the panel may write: inside `/etc/maurice/`, no traversal.
+pub fn validate_host_path(path: &str) -> Result<()> {
+    let ok = path.starts_with("/etc/maurice/") && !path.contains("..") && !path.ends_with('/');
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!("invalid host path '{path}'")))
+    }
+}
+
+/// Container names the panel execs into: DNS-label-like.
+pub fn validate_container_name(name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 63
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if ok {
+        Ok(())
+    } else {
+        Err(AgentError::Refused(format!(
+            "invalid container name '{name}'"
+        )))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +250,24 @@ pub enum Op {
         repo: String,
         git_ref: String,
         image: String,
+    },
+    WriteUserFile {
+        user: String,
+        rel_path: String,
+        content: String,
+    },
+    PodmanExec {
+        user: String,
+        container: String,
+        args: Vec<String>,
+    },
+    WriteHostFile {
+        path: String,
+        content: String,
+    },
+    PodmanExecRoot {
+        container: String,
+        args: Vec<String>,
     },
 }
 
@@ -330,5 +403,48 @@ impl Agent for DryRunAgent {
             image_ref: format!("{}:0000000", spec.image),
             log_tail: "dry-run".into(),
         })
+    }
+
+    async fn write_user_file(&self, user: &UserRef, rel_path: &str, content: &str) -> Result<()> {
+        validate_user_rel_path(rel_path)?;
+        self.record(Op::WriteUserFile {
+            user: user.name.clone(),
+            rel_path: rel_path.into(),
+            content: content.into(),
+        });
+        Ok(())
+    }
+    async fn read_user_file(&self, _user: &UserRef, rel_path: &str) -> Result<Option<String>> {
+        validate_user_rel_path(rel_path)?;
+        Ok(None)
+    }
+    async fn podman_exec(&self, user: &UserRef, container: &str, args: &[&str]) -> Result<String> {
+        validate_container_name(container)?;
+        self.record(Op::PodmanExec {
+            user: user.name.clone(),
+            container: container.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+        });
+        Ok(String::new())
+    }
+    async fn write_host_file(&self, path: &str, content: &str) -> Result<()> {
+        validate_host_path(path)?;
+        self.record(Op::WriteHostFile {
+            path: path.into(),
+            content: content.into(),
+        });
+        Ok(())
+    }
+    async fn read_host_file(&self, path: &str) -> Result<Option<String>> {
+        validate_host_path(path)?;
+        Ok(None)
+    }
+    async fn podman_exec_root(&self, container: &str, args: &[&str]) -> Result<String> {
+        validate_container_name(container)?;
+        self.record(Op::PodmanExecRoot {
+            container: container.into(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+        });
+        Ok(String::new())
     }
 }

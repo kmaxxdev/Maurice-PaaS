@@ -313,6 +313,7 @@ async fn selftest(
                         resources: maurice_core::Resources::default(),
                         isolated: false,
                         health_cmd: Some("pg_isready -U postgres".into()),
+                        routes: vec![],
                     }],
                 }],
             }],
@@ -428,6 +429,8 @@ async fn prepare_host() -> anyhow::Result<()> {
     ensure_master_key()?;
     ensure_port_range()?;
     ensure_first_admin().await?;
+    ensure_internal_addr().await?;
+    install_host_edge().await?;
     configure_journald().await?;
     install_panel_unit().await?;
     println!("host prepared");
@@ -558,6 +561,72 @@ fn random_token(len: usize) -> String {
     buf.iter()
         .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
         .collect()
+}
+
+/// The internal host address other workspaces reach internal routes on (ADR-009):
+/// a dummy interface brought up by a oneshot unit, address recorded in the env file.
+async fn ensure_internal_addr() -> anyhow::Result<()> {
+    let env_path = "/etc/maurice/maurice.env";
+    let addr = match crate::read_env_file_var(env_path, "MAURICE_INTERNAL_ADDR") {
+        Some(a) => a,
+        None => {
+            let text = std::fs::read_to_string(env_path).unwrap_or_default();
+            std::fs::write(
+                env_path,
+                format!("{text}MAURICE_INTERNAL_ADDR=10.200.0.1\n"),
+            )?;
+            "10.200.0.1".to_string()
+        }
+    };
+    let unit = format!(
+        "# Installed by `maurice host prepare`: the address internal routes bind to.\n\
+[Unit]\n\
+Description=Maurice internal address {addr} on maurice0\n\
+Before=network-online.target\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+RemainAfterExit=yes\n\
+ExecStart=-/usr/sbin/ip link add maurice0 type dummy\n\
+ExecStart=-/usr/sbin/ip addr add {addr}/32 dev maurice0\n\
+ExecStart=/usr/sbin/ip link set maurice0 up\n\
+\n\
+[Install]\n\
+WantedBy=multi-user.target\n"
+    );
+    if write_if_different("/etc/systemd/system/maurice-internal-net.service", &unit)? {
+        run_root("systemctl", &["daemon-reload"]).await?;
+    }
+    run_root(
+        "systemctl",
+        &["enable", "--now", "--quiet", "maurice-internal-net.service"],
+    )
+    .await?;
+    println!("internal address: {addr} on maurice0 (MAURICE_INTERNAL_ADDR)");
+    Ok(())
+}
+
+/// The host edge: a rootful Caddy on 80/443 as a system Quadlet unit, driven by
+/// the panel through a config file and `caddy reload` (ADR-009).
+async fn install_host_edge() -> anyhow::Result<()> {
+    let dir = "/etc/maurice/edge";
+    std::fs::create_dir_all(dir)?;
+    let config_path = format!("{dir}/host.json");
+    if !std::path::Path::new(&config_path).exists() {
+        let email = crate::read_env_file_var("/etc/maurice/maurice.env", "MAURICE_ACME_EMAIL");
+        std::fs::write(
+            &config_path,
+            maurice_quadlet::render_host_edge_config(&[], email.as_deref()),
+        )?;
+    }
+    let unit = maurice_quadlet::render_host_edge_unit(dir);
+    if write_if_different("/etc/containers/systemd/maurice-edge.container", &unit)? {
+        run_root("systemctl", &["daemon-reload"]).await?;
+        println!("edge: /etc/containers/systemd/maurice-edge.container written");
+    }
+    println!("edge: starting maurice-edge.service (host Caddy on 80/443)");
+    run_root("systemctl", &["start", "maurice-edge.service"]).await?;
+    Ok(())
 }
 
 /// Connect to the panel database named in the env file; runs migrations.

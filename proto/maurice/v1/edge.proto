@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package maurice.v1;
+
+import "maurice/v1/common.proto";
+
+// Who may reach a route: the internet through the host edge, or other
+// workspaces on the internal host address.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_PUBLIC = 1;
+  VISIBILITY_INTERNAL = 2;
+}
+
+// How the host edge serves a domain.
+enum TlsMode {
+  TLS_MODE_UNSPECIFIED = 0;
+  // Public CA certificates (ACME); HTTP redirects to HTTPS.
+  TLS_MODE_AUTO = 1;
+  // Caddy's internal CA; for hosts without public DNS.
+  TLS_MODE_INTERNAL = 2;
+  // Plain HTTP only.
+  TLS_MODE_OFF = 3;
+}
+
+message Domain {
+  string id = 1;
+  string route_id = 2;
+  string name = 3;
+  // Public address to listen on; empty = every address.
+  string public_ip = 4;
+  TlsMode tls = 5;
+}
+
+// A route on the workspace edge (ADR-009): a block port that proxies to a container port.
+message Route {
+  string id = 1;
+  string workspace_id = 2;
+  Env environment = 3;
+  string service_id = 4;
+  string service = 5;
+  uint32 container_port = 6;
+  // Port of the workspace edge inside the workspace block.
+  uint32 block_port = 7;
+  Visibility visibility = 8;
+  repeated Domain domains = 9;
+  // Container the edge currently proxies to; empty until the service is deployed.
+  string upstream = 10;
+}
+
+message ListRoutesRequest {
+  string workspace_id = 1;
+}
+message ListRoutesResponse {
+  repeated Route routes = 1;
+}
+message PlanExposeRequest {
+  string service_id = 1;
+  uint32 container_port = 2;
+  Visibility visibility = 3;
+  // 0 = next free port of the block.
+  uint32 block_port = 4;
+  // Optional first domain for a public route.
+  string domain = 5;
+  string public_ip = 6;
+  TlsMode tls = 7;
+}
+message PlanUnexposeRequest {
+  string route_id = 1;
+}
+message PlanAddDomainRequest {
+  string route_id = 1;
+  string domain = 2;
+  string public_ip = 3;
+  TlsMode tls = 4;
+}
+message PlanRemoveDomainRequest {
+  string domain_id = 1;
+}
+
+// State of both edges, for the UI.
+message EdgeStatus {
+  // Host edge unit state (systemd ActiveState), empty when not installed.
+  string host_edge = 1;
+  // Internal address other workspaces reach internal routes on.
+  string internal_addr = 2;
+  // Workspace edge unit state for the requested workspace.
+  string workspace_edge = 3;
+}
+message GetEdgeStatusRequest {
+  string workspace_id = 1;
+}
+
+service Edge {
+  // scope: read
+  rpc ListRoutes(ListRoutesRequest) returns (ListRoutesResponse);
+  rpc GetEdgeStatus(GetEdgeStatusRequest) returns (EdgeStatus);
+  // scope: plan. Expose a container port on the workspace edge.
+  rpc PlanExpose(PlanExposeRequest) returns (Plan);
+  rpc PlanUnexpose(PlanUnexposeRequest) returns (Plan);
+  rpc PlanAddDomain(PlanAddDomainRequest) returns (Plan);
+  rpc PlanRemoveDomain(PlanRemoveDomainRequest) returns (Plan);
+}

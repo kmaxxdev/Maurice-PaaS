@@ -830,6 +830,86 @@ impl Agent for HostAgent {
         }
         Ok(status)
     }
+
+    async fn write_user_file(&self, user: &UserRef, rel_path: &str, content: &str) -> Result<()> {
+        crate::validate_user_rel_path(rel_path)?;
+        let (gid, home) = self.home_of(user).await?;
+        let path = home.join(rel_path);
+        let dir = path.parent().expect("validated path has a parent");
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        std::os::unix::fs::chown(dir, Some(user.uid), Some(gid))
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        let tmp = dir.join(format!(
+            ".{}.tmp",
+            path.file_name().expect("file name").to_string_lossy()
+        ));
+        tokio::fs::write(&tmp, content)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        std::os::unix::fs::chown(&tmp, Some(user.uid), Some(gid))
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        tokio::fs::rename(&tmp, &path)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        tracing::info!(user = %user.name, file = %path.display(), "file written");
+        Ok(())
+    }
+
+    async fn read_user_file(&self, user: &UserRef, rel_path: &str) -> Result<Option<String>> {
+        crate::validate_user_rel_path(rel_path)?;
+        let (_, home) = self.home_of(user).await?;
+        match tokio::fs::read_to_string(home.join(rel_path)).await {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(AgentError::Host(e.to_string())),
+        }
+    }
+
+    async fn podman_exec(&self, user: &UserRef, container: &str, args: &[&str]) -> Result<String> {
+        crate::validate_container_name(container)?;
+        let mut full = vec!["podman", "exec", container];
+        full.extend_from_slice(args);
+        self.run_as_user_with_stdin(user, &full, b"").await
+    }
+
+    async fn write_host_file(&self, path: &str, content: &str) -> Result<()> {
+        crate::validate_host_path(path)?;
+        let p = std::path::Path::new(path);
+        let dir = p.parent().expect("validated path has a parent");
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        let tmp = dir.join(format!(
+            ".{}.tmp",
+            p.file_name().expect("file name").to_string_lossy()
+        ));
+        tokio::fs::write(&tmp, content)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        tokio::fs::rename(&tmp, p)
+            .await
+            .map_err(|e| AgentError::Host(e.to_string()))?;
+        tracing::info!(file = %path, "host file written");
+        Ok(())
+    }
+
+    async fn read_host_file(&self, path: &str) -> Result<Option<String>> {
+        crate::validate_host_path(path)?;
+        match tokio::fs::read_to_string(path).await {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(AgentError::Host(e.to_string())),
+        }
+    }
+
+    async fn podman_exec_root(&self, container: &str, args: &[&str]) -> Result<String> {
+        crate::validate_container_name(container)?;
+        let mut full = vec!["exec", container];
+        full.extend_from_slice(args);
+        self.run("podman", &full).await
+    }
 }
 
 async fn chown_recursive(root: &Path, uid: u32, gid: u32) -> Result<()> {

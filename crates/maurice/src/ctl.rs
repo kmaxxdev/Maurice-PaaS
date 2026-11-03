@@ -145,6 +145,49 @@ pub enum PlanCommand {
 }
 
 #[derive(Subcommand)]
+pub enum RouteCommand {
+    /// List routes of a workspace: block port → service port, visibility, domains.
+    List { workspace: String },
+    /// Show both edges' state for a workspace.
+    Status { workspace: String },
+    /// Plan exposing a container port of a service on the workspace edge.
+    Expose {
+        service: String,
+        /// Container port to proxy to.
+        #[arg(long)]
+        port: u32,
+        /// Reachable only from other workspaces on the internal address.
+        #[arg(long)]
+        internal: bool,
+        /// Block port to listen on; default: next free.
+        #[arg(long, default_value_t = 0)]
+        block_port: u32,
+        /// Attach a domain on the host edge (public routes).
+        #[arg(long)]
+        domain: Option<String>,
+        /// auto (public CA), internal (Caddy's CA) or off (plain HTTP).
+        #[arg(long, default_value = "auto")]
+        tls: String,
+        /// Public address the domain listens on; default: every address.
+        #[arg(long)]
+        public_ip: Option<String>,
+    },
+    /// Plan removing a route and its domains.
+    Unexpose { route: String },
+    /// Plan attaching a domain to a public route.
+    AddDomain {
+        route: String,
+        domain: String,
+        #[arg(long, default_value = "auto")]
+        tls: String,
+        #[arg(long)]
+        public_ip: Option<String>,
+    },
+    /// Plan removing a domain.
+    RemoveDomain { domain: String },
+}
+
+#[derive(Subcommand)]
 pub enum AuthCommand {
     /// Sign in with a login and password; stores an API token for later calls.
     Login {
@@ -201,6 +244,152 @@ fn config(server: &str, tier: Tier) -> anyhow::Result<ClientConfig> {
         tier.to_string().parse()?,
     );
     Ok(ClientConfig::new(server.parse()?).with_default_headers(headers))
+}
+
+fn parse_tls(s: &str) -> anyhow::Result<TlsMode> {
+    match s {
+        "auto" => Ok(TlsMode::TLS_MODE_AUTO),
+        "internal" => Ok(TlsMode::TLS_MODE_INTERNAL),
+        "off" => Ok(TlsMode::TLS_MODE_OFF),
+        other => anyhow::bail!("tls must be auto, internal or off, got {other}"),
+    }
+}
+
+pub async fn route(cmd: RouteCommand, server: &str, tier: Tier) -> anyhow::Result<()> {
+    let client = EdgeClient::new(Client::plaintext(), config(server, tier)?);
+    match cmd {
+        RouteCommand::List { workspace } => {
+            let resp = client
+                .list_routes(ListRoutesRequest {
+                    workspace_id: workspace,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            if resp.routes.is_empty() {
+                println!("no routes");
+            }
+            for r in &resp.routes {
+                let domains: Vec<String> = r
+                    .domains
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "{} ({})",
+                            d.name,
+                            format!("{:?}", d.tls)
+                                .to_lowercase()
+                                .replace("tls_mode_", "")
+                        )
+                    })
+                    .collect();
+                println!(
+                    "{:<36} :{:<6} → {:<8} {:<10}:{:<6} {:<9} {:<28} {}",
+                    r.id,
+                    r.block_port,
+                    env_label(r.environment.as_known()),
+                    r.service,
+                    r.container_port,
+                    format!("{:?}", r.visibility)
+                        .to_lowercase()
+                        .replace("visibility_", ""),
+                    if r.upstream.is_empty() {
+                        "(not deployed)".to_string()
+                    } else {
+                        r.upstream.clone()
+                    },
+                    domains.join(", ")
+                );
+            }
+        }
+        RouteCommand::Status { workspace } => {
+            let s = client
+                .get_edge_status(GetEdgeStatusRequest {
+                    workspace_id: workspace,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            println!(
+                "host edge: {}  workspace edge: {}  internal address: {}",
+                s.host_edge,
+                s.workspace_edge,
+                if s.internal_addr.is_empty() {
+                    "-"
+                } else {
+                    &s.internal_addr
+                }
+            );
+        }
+        RouteCommand::Expose {
+            service,
+            port,
+            internal,
+            block_port,
+            domain,
+            tls,
+            public_ip,
+        } => {
+            let p = client
+                .plan_expose(PlanExposeRequest {
+                    service_id: service,
+                    container_port: port,
+                    visibility: if internal {
+                        Visibility::VISIBILITY_INTERNAL
+                    } else {
+                        Visibility::VISIBILITY_PUBLIC
+                    }
+                    .into(),
+                    block_port,
+                    domain: domain.unwrap_or_default(),
+                    public_ip: public_ip.unwrap_or_default(),
+                    tls: parse_tls(&tls)?.into(),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        RouteCommand::Unexpose { route } => {
+            let p = client
+                .plan_unexpose(PlanUnexposeRequest {
+                    route_id: route,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        RouteCommand::AddDomain {
+            route,
+            domain,
+            tls,
+            public_ip,
+        } => {
+            let p = client
+                .plan_add_domain(PlanAddDomainRequest {
+                    route_id: route,
+                    domain,
+                    public_ip: public_ip.unwrap_or_default(),
+                    tls: parse_tls(&tls)?.into(),
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+        RouteCommand::RemoveDomain { domain } => {
+            let p = client
+                .plan_remove_domain(PlanRemoveDomainRequest {
+                    domain_id: domain,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            print_plan(&p);
+        }
+    }
+    Ok(())
 }
 
 pub async fn auth(cmd: AuthCommand, server: &str, tier: Tier) -> anyhow::Result<()> {

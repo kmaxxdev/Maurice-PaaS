@@ -7,6 +7,7 @@ pub mod proto {
 
 pub mod auth;
 pub mod crypto;
+pub mod edge;
 pub mod model_map;
 pub mod services;
 mod ui;
@@ -31,7 +32,10 @@ pub fn router(state: Arc<services::State>) -> connectrpc::Router {
         .add_service(Arc::new(services::PlansSvc {
             state: state.clone(),
         }))
-        .add_service(Arc::new(auth::AuthSvc { state }))
+        .add_service(Arc::new(auth::AuthSvc {
+            state: state.clone(),
+        }))
+        .add_service(Arc::new(edge::EdgeSvc { state }))
 }
 
 /// Full axum application: Connect RPCs, a plain health route and the embedded SPA.

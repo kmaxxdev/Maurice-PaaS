@@ -294,6 +294,25 @@ pub fn service_to_core(
         },
         isolated: s.isolated,
         health_cmd: s.health_cmd.clone(),
+        routes: full
+            .routes
+            .iter()
+            .map(|(r, domains)| maurice_core::Route {
+                container_port: r.container_port as u16,
+                block_port: r.block_port as u16,
+                visibility: maurice_core::Visibility::parse(&r.visibility)
+                    .unwrap_or(maurice_core::Visibility::Public),
+                domains: domains
+                    .iter()
+                    .map(|d| maurice_core::Domain {
+                        name: d.name.clone(),
+                        public_ip: d.public_ip.as_deref().and_then(|s| s.parse().ok()),
+                        tls: maurice_core::TlsMode::parse(&d.tls_mode)
+                            .unwrap_or(maurice_core::TlsMode::Auto),
+                    })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

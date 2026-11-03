@@ -49,6 +49,7 @@ sudo systemctl enable --now maurice                      # panel on 127.0.0.1:77
 
 marik login -u admin                                     # password printed by host prepare; stores a CLI token
 marik workspace create shop && marik plan apply <plan-id>   # dev and prod environments, a block of 500 host ports
+marik route expose <service-id> --port 80 --domain shop.example.com && marik plan apply <plan-id>   # on the internet, with TLS
 ```
 
 Full walkthrough, CLI reference and known limits: the

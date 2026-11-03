@@ -28,6 +28,12 @@ pub struct State {
     pub home_root: String,
     /// Host ports workspace blocks are carved from, inclusive.
     pub port_range: (u16, u16),
+    /// Address internal routes are reachable on from other workspaces (ADR-009).
+    pub internal_addr: Option<std::net::IpAddr>,
+    /// Contact for ACME certificates on the host edge.
+    pub acme_email: Option<String>,
+    /// Where the host edge config lives.
+    pub host_edge_dir: String,
 }
 
 impl State {
@@ -38,6 +44,9 @@ impl State {
             master_key,
             home_root: "/srv/ws".into(),
             port_range: (20000, 39999),
+            internal_addr: None,
+            acme_email: None,
+            host_edge_dir: "/etc/maurice/edge".into(),
         }
     }
 }
@@ -127,6 +136,12 @@ pub enum PlanPayload {
         unit_files: Vec<String>,
         purge_volumes: bool,
     },
+    /// Expose, unexpose, add or remove a domain; both edges follow.
+    EdgeChange {
+        workspace_id: Uuid,
+        environment: String,
+        op: crate::edge::EdgeOp,
+    },
 }
 
 /// Build inputs stored in the plan; the deploy key is looked up at apply time.
@@ -156,19 +171,19 @@ struct StoredChanges {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredChange {
-    kind: String,
-    target: String,
-    diff: String,
-    destructive: bool,
+pub(crate) struct StoredChange {
+    pub(crate) kind: String,
+    pub(crate) target: String,
+    pub(crate) diff: String,
+    pub(crate) destructive: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredFinding {
-    severity: String,
-    code: String,
-    message: String,
-    target: String,
+pub(crate) struct StoredFinding {
+    pub(crate) severity: String,
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) target: String,
 }
 
 impl From<&maurice_core::Finding> for StoredFinding {
@@ -187,20 +202,20 @@ impl From<&maurice_core::Finding> for StoredFinding {
     }
 }
 
-fn internal(e: impl std::fmt::Display) -> ConnectError {
+pub(crate) fn internal(e: impl std::fmt::Display) -> ConnectError {
     tracing::error!(error = %e, "internal");
     ConnectError::new(ErrorCode::Internal, e.to_string())
 }
 
-fn invalid(msg: impl Into<String>) -> ConnectError {
+pub(crate) fn invalid(msg: impl Into<String>) -> ConnectError {
     ConnectError::new(ErrorCode::InvalidArgument, msg)
 }
 
-fn not_found(what: &str, id: &str) -> ConnectError {
+pub(crate) fn not_found(what: &str, id: &str) -> ConnectError {
     ConnectError::new(ErrorCode::NotFound, format!("{what} {id} not found"))
 }
 
-fn parse_uuid(s: &str, what: &str) -> Result<Uuid, ConnectError> {
+pub(crate) fn parse_uuid(s: &str, what: &str) -> Result<Uuid, ConnectError> {
     Uuid::parse_str(s).map_err(|_| invalid(format!("{what} id must be a uuid")))
 }
 
@@ -208,7 +223,7 @@ fn env_required(e: buffa::EnumValue<Env>) -> Result<&'static str, ConnectError> 
     env_from_proto(e).ok_or_else(|| invalid("environment must be ENV_DEV, ENV_STAGING or ENV_PROD"))
 }
 
-fn core_env(name: &str) -> Result<CoreEnv, ConnectError> {
+pub(crate) fn core_env(name: &str) -> Result<CoreEnv, ConnectError> {
     CoreEnv::parse(name).ok_or_else(|| internal(format!("unknown environment '{name}'")))
 }
 
@@ -296,7 +311,7 @@ fn plan_to_proto(p: &PlanRow) -> Result<Plan, ConnectError> {
     })
 }
 
-async fn store_plan(
+pub(crate) async fn store_plan(
     state: &State,
     created_by: &Principal,
     workspace_id: Uuid,
@@ -323,7 +338,7 @@ async fn store_plan(
 }
 
 /// Line-based diff for unit files: enough to show what changes on disk.
-fn unit_diff(old: Option<&str>, new: &str) -> String {
+pub(crate) fn unit_diff(old: Option<&str>, new: &str) -> String {
     let Some(old) = old else {
         return new
             .lines()
@@ -358,12 +373,12 @@ struct SecretRef {
 }
 
 /// Everything the handlers need about one workspace, loaded in one go.
-struct Loaded {
-    ws: WorkspaceRow,
-    user: UserRef,
-    environments: Vec<EnvironmentRow>,
-    projects: Vec<maurice_db::ProjectRow>,
-    services: Vec<maurice_db::ServiceFull>,
+pub(crate) struct Loaded {
+    pub(crate) ws: WorkspaceRow,
+    pub(crate) user: UserRef,
+    pub(crate) environments: Vec<EnvironmentRow>,
+    pub(crate) projects: Vec<maurice_db::ProjectRow>,
+    pub(crate) services: Vec<maurice_db::ServiceFull>,
     /// Every secret id referenced anywhere → scope and name.
     secret_refs: HashMap<Uuid, SecretRef>,
     /// Latest version of each secret by (environment id, name); `None` = shared.
@@ -385,7 +400,7 @@ impl Loaded {
         move |id| self.secret_refs.get(&id).map(|r| r.name.clone())
     }
     /// Podman secret name, for units.
-    fn secret_podman_name(&self) -> impl Fn(Uuid) -> Option<String> + '_ {
+    pub(crate) fn secret_podman_name(&self) -> impl Fn(Uuid) -> Option<String> + '_ {
         move |id| {
             self.secret_refs
                 .get(&id)
@@ -413,7 +428,7 @@ impl Loaded {
     }
 }
 
-async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError> {
+pub(crate) async fn load(state: &State, workspace_id: Uuid) -> Result<Loaded, ConnectError> {
     let Some(ws) = state
         .store
         .get_workspace(workspace_id)
@@ -683,10 +698,26 @@ impl Workspaces for WorkspacesSvc {
                     ..Default::default()
                 });
             }
+            for (r, _) in &s.routes {
+                used.push(UsedPort {
+                    host_ip: "127.0.0.1".into(),
+                    host_port: r.block_port as u32,
+                    environment: env_to_proto(&s.environment).into(),
+                    service: format!("{} (edge route)", s.service.name),
+                    ..Default::default()
+                });
+            }
         }
+        used.push(UsedPort {
+            host_ip: "127.0.0.1".into(),
+            host_port: block.edge_port() as u32,
+            service: "workspace edge".into(),
+            ..Default::default()
+        });
         used.sort_by_key(|u| u.host_port);
         let taken: std::collections::HashSet<u32> = used.iter().map(|u| u.host_port).collect();
-        let next_free = (block.start..=block.end())
+        let next_free = block
+            .usable()
             .map(u32::from)
             .find(|p| !taken.contains(p))
             .unwrap_or(0);
@@ -1279,6 +1310,7 @@ impl Services for ServicesSvc {
             environment: env_name.clone(),
             ports: ports.clone(),
             env: env_vars.clone(),
+            routes: existing.map(|e| e.routes.clone()).unwrap_or_default(),
         };
         let core_svc = model_map::service_to_core(&new_full, &loaded.secret_podman_name());
         let core_env_model = match core.environments.iter_mut().find(|e| e.env == env) {
@@ -2028,7 +2060,12 @@ async fn execute(
                 .write_unit(&user, &net.file_name, &net.content)
                 .await?;
             state.agent.daemon_reload(&user).await?;
-            events.push(event(0, DONE, format!("{environment} environment ready")));
+            let r = crate::edge::sync_workspace_edge(state, ws.id).await?;
+            events.push(event(
+                0,
+                DONE,
+                format!("{environment} environment ready; {r}"),
+            ));
         }
         PlanPayload::DeleteWorkspace {
             workspace_id,
@@ -2060,7 +2097,8 @@ async fn execute(
                 Err(e) => return Err(e.into()),
             }
             state.store.delete_workspace(workspace_id).await?;
-            events.push(event(0, DONE, format!("{unix_user} removed")));
+            let r = crate::edge::sync_host_edge(state).await?;
+            events.push(event(0, DONE, format!("{unix_user} removed; {r}")));
         }
         PlanPayload::UpsertService {
             workspace_id,
@@ -2129,6 +2167,19 @@ async fn execute(
                 events.push(event(i, STARTED, format!("restarting {unit}")));
                 state.agent.restart_unit(&user, &unit).await?;
                 events.push(event(i, DONE, format!("{unit} restarted")));
+            }
+            // Directly published ports are carved out of the edge's ranges, so a
+            // change here may need the edge unit rewritten.
+            if state
+                .agent
+                .read_unit(&user, "edge.container")
+                .await?
+                .is_some()
+            {
+                let i = units.len() + 2;
+                events.push(event(i, STARTED, "workspace edge"));
+                let r = crate::edge::sync_workspace_edge(state, workspace_id).await?;
+                events.push(event(i, DONE, r));
             }
             events.push(event(0, DONE, format!("service {} saved", service.id)));
         }
@@ -2235,6 +2286,19 @@ async fn execute(
                 state.agent.daemon_reload(&user).await?;
                 idx += 1;
             }
+            // The edge carves directly published ports out of its ranges; make sure it
+            // has let go of this service's ports before the service binds them.
+            if state
+                .agent
+                .read_unit(&user, "edge.container")
+                .await?
+                .is_some()
+            {
+                events.push(event(idx, STARTED, "workspace edge"));
+                let r = crate::edge::sync_workspace_edge(state, workspace_id).await?;
+                events.push(event(idx, DONE, r));
+                idx += 1;
+            }
             let dep_id = Uuid::now_v7();
             let started = OffsetDateTime::now_utc();
             events.push(event(
@@ -2278,6 +2342,24 @@ async fn execute(
                     after.active_state, after.sub_state
                 ),
             ));
+            // Routes point at the container by name, which carries the version.
+            let has_routes = state
+                .store
+                .get_service(service_id)
+                .await?
+                .is_some_and(|s| !s.routes.is_empty());
+            if has_routes {
+                events.push(event(idx + 1, STARTED, "workspace edge"));
+                let r = crate::edge::sync_workspace_edge(state, workspace_id).await?;
+                events.push(event(idx + 1, DONE, r));
+            }
+        }
+        PlanPayload::EdgeChange {
+            workspace_id,
+            environment: _,
+            op,
+        } => {
+            crate::edge::execute_edge(state, workspace_id, op, events).await?;
         }
         PlanPayload::DeleteService {
             workspace_id,
@@ -2308,7 +2390,19 @@ async fn execute(
                 events.push(event(i + 1, DONE, f.clone()));
             }
             state.agent.daemon_reload(&user).await?;
+            let had_routes = state
+                .store
+                .get_service(service_id)
+                .await?
+                .is_some_and(|s| !s.routes.is_empty());
             state.store.delete_service(service_id).await?;
+            if had_routes {
+                let i = unit_files.len() + 1;
+                events.push(event(i, STARTED, "edges"));
+                let a = crate::edge::sync_workspace_edge(state, workspace_id).await?;
+                let b = crate::edge::sync_host_edge(state).await?;
+                events.push(event(i, DONE, format!("{a}; {b}")));
+            }
         }
     }
     Ok(())
@@ -2385,7 +2479,8 @@ impl Plans for PlansSvc {
             | PlanPayload::AddEnvironment { .. } => Need::apply().admin(),
             PlanPayload::UpsertService { environment, .. }
             | PlanPayload::DeployService { environment, .. }
-            | PlanPayload::DeleteService { environment, .. } => {
+            | PlanPayload::DeleteService { environment, .. }
+            | PlanPayload::EdgeChange { environment, .. } => {
                 Need::apply().env_opt(CoreEnv::parse(environment))
             }
         };

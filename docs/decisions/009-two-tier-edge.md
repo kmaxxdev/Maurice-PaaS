@@ -25,6 +25,19 @@ Two tiers of Caddy, both driven by the panel through the admin API and both rebu
 - **Rootless Caddy per workspace as the only tier.** Needs a public IP per workspace because 80/443 can be held once per address, and scatters certificates. It returns here as the inner tier.
 - **Forward-auth or a service mesh in front of containers.** Out of scope for a single server.
 
+## Implementation notes (2026-11-03)
+
+- The workspace edge is one container per **workspace**, not per environment: it joins every
+  environment network and publishes the workspace's port block once, which is what lets routes
+  change without restarting it. Upstreams are container names (which carry the version), so
+  environments never collide on aliases.
+- Ports a service publishes directly are carved out of the edge's ranges; the edge unit is
+  rewritten and restarted when that set changes, routes only reload.
+- Both edges are driven through a config file and `caddy reload` over a unix admin socket
+  (`podman exec`), so no admin API is reachable over the network.
+- Internal routes bind to a dedicated host address (`MAURICE_INTERNAL_ADDR`, default 10.200.0.1
+  on a dummy interface) because rootless containers cannot reach the host's loopback.
+
 ## Consequences
 
 - The public tier is small and stable; blast radius of a deploy is one workspace.

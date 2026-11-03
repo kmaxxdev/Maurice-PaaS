@@ -64,9 +64,74 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
         validate_environment(ws, e, &mut findings);
     }
 
-    // Published host ports must not collide anywhere in the workspace.
+    // Published host ports and edge routes must not collide anywhere in the workspace,
+    // must lie in the block, and must leave the edge its own port.
     let mut bound: HashMap<String, String> = HashMap::new();
+    let mut domains: HashMap<String, String> = HashMap::new();
     for (env, s) in ws.services() {
+        let who = format!("{env}/{}", s.name);
+        for r in &s.routes {
+            let key = format!("127.0.0.1:{}", r.block_port);
+            if r.block_port == ws.port_block.edge_port() {
+                findings.push(Finding::error(
+                    "port.reserved",
+                    format!("port:{key}"),
+                    format!(
+                        "'{who}' routes through {} which is the edge's own port",
+                        r.block_port
+                    ),
+                ));
+            } else if !ws.port_block.contains(r.block_port) {
+                findings.push(Finding::error(
+                    "port.outside_block",
+                    format!("port:{key}"),
+                    format!(
+                        "'{who}' routes through {} but the workspace owns ports {}",
+                        r.block_port, ws.port_block
+                    ),
+                ));
+            }
+            if !s.ports.iter().any(|p| p.container_port == r.container_port) {
+                findings.push(Finding::error(
+                    "route.unknown_port",
+                    format!("route:{}/{}", s.name, r.block_port),
+                    format!(
+                        "'{who}' routes to container port {} which the service does not declare",
+                        r.container_port
+                    ),
+                ));
+            }
+            if let Some(other) = bound.insert(key.clone(), who.clone()) {
+                findings.push(Finding::error(
+                    "port.conflict",
+                    format!("port:{key}"),
+                    format!("{key} is used by both '{other}' and '{who}'"),
+                ));
+            }
+            for d in &r.domains {
+                if !is_hostname(&d.name) {
+                    findings.push(Finding::error(
+                        "domain.invalid",
+                        format!("domain:{}", d.name),
+                        format!("'{}' is not a valid host name", d.name),
+                    ));
+                }
+                if r.visibility != crate::Visibility::Public {
+                    findings.push(Finding::error(
+                        "domain.internal_route",
+                        format!("domain:{}", d.name),
+                        format!("'{}' is attached to an internal route of '{who}'", d.name),
+                    ));
+                }
+                if let Some(other) = domains.insert(d.name.clone(), who.clone()) {
+                    findings.push(Finding::error(
+                        "domain.duplicate",
+                        format!("domain:{}", d.name),
+                        format!("'{}' is attached to both '{other}' and '{who}'", d.name),
+                    ));
+                }
+            }
+        }
         let mut container_ports = HashSet::new();
         for p in &s.ports {
             if !container_ports.insert(p.container_port) {
@@ -78,8 +143,16 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
             }
             if let Some(pubd) = p.published {
                 let key = format!("{}:{}", pubd.host_ip, pubd.host_port);
-                let who = format!("{env}/{}", s.name);
-                if !ws.port_block.contains(pubd.host_port) {
+                if pubd.host_port == ws.port_block.edge_port() {
+                    findings.push(Finding::error(
+                        "port.reserved",
+                        format!("port:{key}"),
+                        format!(
+                            "'{who}' publishes {} which is the edge's own port",
+                            pubd.host_port
+                        ),
+                    ));
+                } else if !ws.port_block.contains(pubd.host_port) {
                     findings.push(Finding::error(
                         "port.outside_block",
                         format!("port:{key}"),
@@ -197,6 +270,15 @@ pub fn has_errors(findings: &[Finding]) -> bool {
     findings.iter().any(|f| f.severity == Severity::Error)
 }
 
+/// A host name for a domain: dot-separated DNS labels, at most 253 characters.
+pub fn is_hostname(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 253
+        && !s.ends_with('.')
+        && s.split('.').all(is_dns_label)
+        && s.contains('.')
+}
+
 /// Workspace and service names are DNS labels: lowercase letters, digits, dashes, 1-63 chars.
 pub fn is_dns_label(s: &str) -> bool {
     !s.is_empty()
@@ -242,6 +324,7 @@ mod tests {
             resources: Resources::default(),
             isolated: false,
             health_cmd: None,
+            routes: vec![],
         }
     }
 
@@ -409,6 +492,56 @@ mod tests {
         assert_eq!(f.len(), 1, "{f:?}");
         assert_eq!(f[0].code, "port.outside_block");
         assert!(f[0].message.contains("8000-8999"));
+    }
+
+    #[test]
+    fn routes_follow_the_block_rules() {
+        let mut web = svc("web");
+        web.ports.push(Port {
+            container_port: 80,
+            published: None,
+        });
+        web.routes.push(Route {
+            container_port: 80,
+            block_port: 8080,
+            visibility: Visibility::Public,
+            domains: vec![Domain {
+                name: "shop.example.com".into(),
+                public_ip: None,
+                tls: TlsMode::Auto,
+            }],
+        });
+        assert!(validate_workspace(&ws(vec![web.clone()])).is_empty());
+        // Reserved edge port, unknown container port, bad and duplicate domains.
+        web.routes.push(Route {
+            container_port: 81,
+            block_port: 8999,
+            visibility: Visibility::Internal,
+            domains: vec![Domain {
+                name: "shop.example.com".into(),
+                public_ip: None,
+                tls: TlsMode::Off,
+            }],
+        });
+        let f = validate_workspace(&ws(vec![web]));
+        let codes: Vec<&str> = f.iter().map(|x| x.code).collect();
+        for c in [
+            "port.reserved",
+            "route.unknown_port",
+            "domain.duplicate",
+            "domain.internal_route",
+        ] {
+            assert!(codes.contains(&c), "{c} missing in {codes:?}");
+        }
+    }
+
+    #[test]
+    fn hostnames() {
+        assert!(is_hostname("shop.example.com"));
+        assert!(is_hostname("a.b"));
+        assert!(!is_hostname("localhost"));
+        assert!(!is_hostname("Shop.Example.com"));
+        assert!(!is_hostname("shop..com"));
     }
 
     #[test]
