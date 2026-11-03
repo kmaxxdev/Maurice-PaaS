@@ -281,6 +281,7 @@ mod tests {
             source: Source::Build {
                 dockerfile: "Dockerfile".into(),
                 context: ".".into(),
+                args: Default::default(),
             },
             ports: vec![
                 Port {

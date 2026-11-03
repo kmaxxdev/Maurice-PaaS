@@ -17,6 +17,12 @@ export function ServiceForm(props: { initial?: Service; secretNames?: string[]; 
   const [sourceKind, setSourceKind] = createSignal<"image" | "build">(init?.source.case === "dockerfilePath" ? "build" : "image");
   const [image, setImage] = createSignal(init?.source.case === "imageRef" ? init.source.value : "");
   const [dockerfile, setDockerfile] = createSignal(init?.source.case === "dockerfilePath" ? init.source.value : "Dockerfile");
+  const [buildContext, setBuildContext] = createSignal(init?.buildContext ?? "");
+  const [buildArgs, setBuildArgs] = createSignal(
+    Object.entries(init?.buildArgs ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n"),
+  );
   const [ports, setPorts] = createSignal(
     (init?.ports ?? []).map((p) => (p.published ? `${p.containerPort}:${p.hostIp}:${p.hostPort}` : `${p.containerPort}`)).join("\n"),
   );
@@ -55,10 +61,18 @@ export function ServiceForm(props: { initial?: Service; secretNames?: string[]; 
         if (v.startsWith("{{")) return { key, value: { case: "ref" as const, value: v } };
         return { key, value: { case: "literal" as const, value: v } };
       });
+    const argList: Record<string, string> = {};
+    for (const l of buildArgs().split("\n").map((l) => l.trim()).filter(Boolean)) {
+      const i = l.indexOf("=");
+      if (i <= 0) throw new Error(`bad build arg line: ${l}`);
+      argList[l.slice(0, i)] = l.slice(i + 1);
+    }
     return create(ServiceSchema, {
       name: name().trim(),
       kind: kind() === "stateful" ? ServiceKind.STATEFUL : ServiceKind.STATELESS,
       source: sourceKind() === "image" ? { case: "imageRef", value: image().trim() } : { case: "dockerfilePath", value: dockerfile().trim() },
+      buildContext: sourceKind() === "build" ? buildContext().trim() : "",
+      buildArgs: sourceKind() === "build" ? argList : {},
       ports: portList,
       env: envList,
       cpu: cpu() ? Number(cpu()) : 0,
@@ -99,10 +113,16 @@ export function ServiceForm(props: { initial?: Service; secretNames?: string[]; 
           </select>
         </label>
         <Show when={sourceKind() === "image"} fallback={
-          <label>
-            Dockerfile path
-            <input id="sf-dockerfile" value={dockerfile()} onInput={(e) => setDockerfile(e.currentTarget.value)} style={{ width: "260px" }} />
-          </label>
+          <>
+            <label>
+              Dockerfile path
+              <input id="sf-dockerfile" value={dockerfile()} onInput={(e) => setDockerfile(e.currentTarget.value)} style={{ width: "220px" }} />
+            </label>
+            <label>
+              Build context (empty = Dockerfile's directory)
+              <input id="sf-context" value={buildContext()} onInput={(e) => setBuildContext(e.currentTarget.value)} placeholder="." style={{ width: "160px" }} />
+            </label>
+          </>
         }>
           <label>
             Image
@@ -123,6 +143,12 @@ export function ServiceForm(props: { initial?: Service; secretNames?: string[]; 
           <textarea id="sf-env" class="mono" style={{ "min-height": "80px" }} value={env()} onInput={(e) => setEnv(e.currentTarget.value)} />
         </label>
       </div>
+      <Show when={sourceKind() === "build"}>
+        <label>
+          <span>Build arguments, one per line: <code>KEY=value</code> (inlined at build time, e.g. public URLs for a front-end)</span>
+          <textarea id="sf-build-args" class="mono" style={{ "min-height": "60px" }} value={buildArgs()} onInput={(e) => setBuildArgs(e.currentTarget.value)} />
+        </label>
+      </Show>
       <Show when={props.secretNames?.length}>
         <div class="muted small">Secrets in this workspace: <For each={props.secretNames}>{(n) => <code style={{ "margin-right": "6px" }}>{n}</code>}</For></div>
       </Show>

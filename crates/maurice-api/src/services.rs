@@ -152,6 +152,8 @@ pub struct StoredBuild {
     pub key_secret_name: Option<String>,
     pub dockerfile: String,
     pub context: String,
+    #[serde(default)]
+    pub args: Vec<(String, String)>,
     /// Image name without tag.
     pub image: String,
     /// Scratch checkout name, unique per environment and service.
@@ -1518,6 +1520,7 @@ impl Services for ServicesSvc {
             maurice_core::Source::Build {
                 dockerfile,
                 context,
+                args,
             } => {
                 let image = build_image_name(&core.name, t.env, &core_svc.name);
                 match full.project.git_repo.as_deref().filter(|r| !r.is_empty()) {
@@ -1556,6 +1559,7 @@ impl Services for ServicesSvc {
                             key_secret_name,
                             dockerfile: dockerfile.clone(),
                             context: context.clone(),
+                            args: args.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                             image: image.clone(),
                             checkout: t.stem.clone(),
                         });
@@ -2232,6 +2236,7 @@ async fn execute(
                             ssh_key,
                             dockerfile: b.dockerfile.clone(),
                             context: b.context.clone(),
+                            args: b.args.clone(),
                             image: b.image.clone(),
                             checkout: b.checkout.clone(),
                         },
