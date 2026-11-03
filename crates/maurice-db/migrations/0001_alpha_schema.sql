@@ -9,7 +9,11 @@ create table workspaces (
     subuid_len    integer not null default 65536,
     home          text not null,
     cpu_slice     text,
-    created_at    timestamptz not null default now()
+    -- Contiguous block of host ports; every host binding of the workspace lies inside it (ADR-012).
+    port_block_start integer not null check (port_block_start between 1024 and 65535),
+    port_block_size  integer not null check (port_block_size in (100, 500, 1000)),
+    created_at    timestamptz not null default now(),
+    exclude using gist (int4range(port_block_start, port_block_start + port_block_size) with &&)
 );
 
 -- An environment owns a Podman network, services and secrets inside a workspace (ADR-012).

@@ -47,7 +47,7 @@ sudo ln -sf maurice /usr/local/bin/marik
 sudo maurice host prepare                                # PostgreSQL, keys, journald, maurice.service
 sudo systemctl enable --now maurice                      # panel on 127.0.0.1:7700
 
-marik workspace create shop && marik plan apply <plan-id>   # dev and prod environments, one network each
+marik workspace create shop && marik plan apply <plan-id>   # dev and prod environments, a block of 500 host ports
 ```
 
 Full walkthrough, CLI reference and known limits: the
@@ -57,7 +57,7 @@ Full walkthrough, CLI reference and known limits: the
 
 | The pain | What Maurice does about it |
 |---|---|
-| Ports exposed by default, closed by hand | Nothing is published until you tick a box. A port lives inside the workspace network until then. |
+| Ports exposed by default, closed by hand | Nothing is published until you tick a box. A port lives inside the workspace network until then, and published ports come from the workspace's own block, so two workspaces can never collide. |
 | `docker.sock` access equals root on a host full of keys | Every workspace is its own system user running rootless Podman. One compromised project cannot reach the others or the host. |
 | Hand-copied configs, typos in env, port clashes | The panel generates Quadlet units from a validated model. Env references like `{{postgres.url}}` are resolved for you. |
 | Admin DB credentials in every service | Database roles (admin / app / readonly) with rotation that restarts the dependents. |

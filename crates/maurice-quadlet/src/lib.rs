@@ -352,6 +352,10 @@ mod tests {
             subuid_len: 65536,
             home: "/srv/ws/shop".into(),
             cpu_slice: Some("maurice-prod.slice".into()),
+            port_block: PortBlock {
+                start: 19000,
+                size: 1000,
+            },
             environments: vec![Environment {
                 env: Env::Prod,
                 projects: vec![Project {

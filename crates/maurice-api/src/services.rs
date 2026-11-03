@@ -25,6 +25,8 @@ pub struct State {
     pub master_key: MasterKey,
     /// Where workspace homes live.
     pub home_root: String,
+    /// Host ports workspace blocks are carved from, inclusive.
+    pub port_range: (u16, u16),
 }
 
 impl State {
@@ -34,8 +36,23 @@ impl State {
             store,
             master_key,
             home_root: "/srv/ws".into(),
+            port_range: (20000, 39999),
         }
     }
+}
+
+/// Parse a `start-end` port range, both inclusive.
+pub fn parse_port_range(s: &str) -> anyhow::Result<(u16, u16)> {
+    let (a, b) = s
+        .trim()
+        .split_once('-')
+        .ok_or_else(|| anyhow::anyhow!("port range must look like 20000-39999"))?;
+    let (a, b): (u16, u16) = (a.trim().parse()?, b.trim().parse()?);
+    anyhow::ensure!(
+        a >= 1024 && b > a && (b - a + 1) >= 100,
+        "port range must start at 1024 or above and hold at least 100 ports"
+    );
+    Ok((a, b))
 }
 
 /// What a plan does when applied. Stored as JSON in `plans.changes` next to the
@@ -51,6 +68,8 @@ pub enum PlanPayload {
         home: String,
         subuid_start: i64,
         subuid_len: i32,
+        port_block_start: i32,
+        port_block_size: i32,
     },
     /// Add an environment and its network to an existing workspace.
     AddEnvironment {
@@ -191,6 +210,8 @@ fn workspace_to_proto(w: &WorkspaceRow, environments: &[EnvironmentRow]) -> Work
             .map(|e| env_to_proto(&e.name).into())
             .collect(),
         cpu_slice: w.cpu_slice.clone().unwrap_or_default(),
+        port_block_start: w.port_block_start as u32,
+        port_block_size: w.port_block_size as u32,
         ..Default::default()
     }
 }
@@ -535,6 +556,7 @@ fn core_workspace_shell(ws: &WorkspaceRow) -> maurice_core::Workspace {
         subuid_len: ws.subuid_len as u32,
         home: ws.home.clone(),
         cpu_slice: ws.cpu_slice.clone(),
+        port_block: model_map::port_block_of(ws),
         environments: vec![],
     }
 }
@@ -620,6 +642,41 @@ impl Workspaces for WorkspacesSvc {
         }
     }
 
+    async fn get_ports(
+        &self,
+        _ctx: RequestContext,
+        req: ServiceRequest<'_, GetPortsRequest>,
+    ) -> ServiceResult<WorkspacePorts> {
+        let wid = parse_uuid(req.workspace_id, "workspace")?;
+        let loaded = load(&self.state, wid).await?;
+        let block = model_map::port_block_of(&loaded.ws);
+        let mut used: Vec<UsedPort> = Vec::new();
+        for s in &loaded.services {
+            for p in s.ports.iter().filter(|p| p.published) {
+                used.push(UsedPort {
+                    host_ip: p.host_ip.clone().unwrap_or_default(),
+                    host_port: p.host_port.unwrap_or(0) as u32,
+                    environment: env_to_proto(&s.environment).into(),
+                    service: s.service.name.clone(),
+                    ..Default::default()
+                });
+            }
+        }
+        used.sort_by_key(|u| u.host_port);
+        let taken: std::collections::HashSet<u32> = used.iter().map(|u| u.host_port).collect();
+        let next_free = (block.start..=block.end())
+            .map(u32::from)
+            .find(|p| !taken.contains(p))
+            .unwrap_or(0);
+        Response::ok(WorkspacePorts {
+            block_start: block.start as u32,
+            block_size: block.size as u32,
+            used,
+            next_free,
+            ..Default::default()
+        })
+    }
+
     async fn plan_add_environment(
         &self,
         _ctx: RequestContext,
@@ -697,10 +754,45 @@ impl Workspaces for WorkspacesSvc {
             .map_err(internal)?;
         let unix_user = format!("ws-{name}");
         let home = format!("{}/{name}", self.state.home_root);
+        // Port block: the requested size from the host range, first free aligned slot.
+        let block_size = if req.port_block_size == 0 {
+            maurice_core::PortBlock::DEFAULT_SIZE
+        } else {
+            u16::try_from(req.port_block_size)
+                .ok()
+                .filter(|s| maurice_core::PortBlock::SIZES.contains(s))
+                .ok_or_else(|| invalid("port_block_size must be 100, 500 or 1000"))?
+        };
+        let held = self
+            .state
+            .store
+            .list_port_blocks()
+            .await
+            .map_err(internal)?;
+        let (range_start, range_end) = self.state.port_range;
+        let block_start = maurice_db::next_port_block(
+            &held,
+            (range_start as i32, range_end as i32),
+            block_size as i32,
+        );
+        if block_start.is_none() {
+            findings.push(StoredFinding {
+                severity: "error".into(),
+                code: "ports.exhausted".into(),
+                message: format!(
+                    "no free block of {block_size} ports left in {range_start}-{range_end}; free a workspace or widen MAURICE_PORT_RANGE"
+                ),
+                target: format!("workspace:{name}"),
+            });
+        }
+        let port_block = maurice_core::PortBlock {
+            start: block_start.unwrap_or(0) as u16,
+            size: block_size,
+        };
         let mut changes = vec![StoredChange {
             kind: "create_user".into(),
             target: format!(
-                "{unix_user} (uid auto, subuid {subuid_start}+{subuid_len}, home {home})"
+                "{unix_user} (uid auto, subuid {subuid_start}+{subuid_len}, ports {port_block}, home {home})"
             ),
             diff: String::new(),
             destructive: false,
@@ -713,6 +805,7 @@ impl Workspaces for WorkspacesSvc {
             subuid_len: subuid_len as u32,
             home: home.clone(),
             cpu_slice: None,
+            port_block,
             environments: vec![],
         };
         for env in &environments {
@@ -731,6 +824,8 @@ impl Workspaces for WorkspacesSvc {
             home,
             subuid_start,
             subuid_len,
+            port_block_start: port_block.start as i32,
+            port_block_size: port_block.size as i32,
         };
         Response::ok(store_plan(&self.state, Uuid::nil(), payload, changes, findings).await?)
     }
@@ -1160,6 +1255,7 @@ impl Services for ServicesSvc {
         // Only findings about this service (or host ports) block its plan; problems of
         // other services are theirs to fix and must not wedge the whole workspace.
         let svc_tag = format!(":{}", row.name);
+        let who = format!("'{env}/{}'", row.name);
         let findings: Vec<StoredFinding> = maurice_core::validate_workspace(&core)
             .iter()
             .filter(|f| {
@@ -1167,6 +1263,7 @@ impl Services for ServicesSvc {
                     || f.target.starts_with(&format!("env:{}/", row.name))
                     || f.target.starts_with(&format!("port:{}/", row.name))
                     || f.code == "port.conflict"
+                    || (f.code.starts_with("port.") && f.message.contains(&who))
                     || f.target.ends_with(&svc_tag)
             })
             .map(StoredFinding::from)
@@ -1229,14 +1326,20 @@ impl Services for ServicesSvc {
             }
             None => false,
         };
-        let units = render_units(
+        // With validation errors the plan cannot be applied anyway; an unresolved
+        // reference is then reported as a finding, not as a request error.
+        let units = match render_units(
             &core,
             env,
             &core_svc,
             &image,
             &maurice_quadlet::image_version(&image),
             deployed,
-        )?;
+        ) {
+            Ok(units) => units,
+            Err(_) if findings.iter().any(|f| f.severity == "error") => vec![],
+            Err(e) => return Err(e),
+        };
         let mut changes = Vec::new();
         for u in &units {
             let on_disk = self
@@ -1713,6 +1816,8 @@ async fn execute(
             home,
             subuid_start,
             subuid_len,
+            port_block_start,
+            port_block_size,
         } => {
             events.push(event(0, STARTED, format!("creating {unix_user}")));
             let user = state
@@ -1733,6 +1838,8 @@ async fn execute(
                 subuid_len,
                 home,
                 cpu_slice: None,
+                port_block_start,
+                port_block_size,
                 created_at: OffsetDateTime::now_utc(),
             };
             state.store.insert_workspace(&wrow).await?;

@@ -15,6 +15,9 @@ message Workspace {
   // Environments that exist in this workspace, each with its own network.
   repeated Env environments = 8;
   string cpu_slice = 9;
+  // Host ports the workspace may bind: [port_block_start, port_block_start + port_block_size).
+  uint32 port_block_start = 10;
+  uint32 port_block_size = 11;
 }
 
 message ListWorkspacesRequest {}
@@ -28,6 +31,25 @@ message PlanCreateWorkspaceRequest {
   string name = 1;
   // Environments to create with the workspace; empty = dev and prod.
   repeated Env environments = 2;
+  // 100, 500 or 1000 host ports; 0 = 500.
+  uint32 port_block_size = 3;
+}
+message GetPortsRequest {
+  string workspace_id = 1;
+}
+message UsedPort {
+  string host_ip = 1;
+  uint32 host_port = 2;
+  Env environment = 3;
+  string service = 4;
+}
+// The workspace's port block and what is bound inside it.
+message WorkspacePorts {
+  uint32 block_start = 1;
+  uint32 block_size = 2;
+  repeated UsedPort used = 3;
+  // Lowest unused port of the block; 0 when the block is full.
+  uint32 next_free = 4;
 }
 message PlanAddEnvironmentRequest {
   string workspace_id = 1;
@@ -44,6 +66,8 @@ service Workspaces {
   rpc List(ListWorkspacesRequest) returns (ListWorkspacesResponse);
   // scope: read
   rpc Get(GetWorkspaceRequest) returns (Workspace);
+  // scope: read. Port block, bindings inside it and the next free port.
+  rpc GetPorts(GetPortsRequest) returns (WorkspacePorts);
   // scope: plan
   rpc PlanCreate(PlanCreateWorkspaceRequest) returns (Plan);
   // scope: plan. Adds an environment (and its network) to an existing workspace.

@@ -42,6 +42,7 @@ export function Workspace() {
     return out;
   });
   const [secretList, { refetch: refetchSecrets }] = createResource(() => params.id, async (id) => (await secrets.list({ workspaceId: id })).secrets);
+  const [ports, { refetch: refetchPorts }] = createResource(() => params.id, (id) => workspaces.getPorts({ workspaceId: id }));
   const [plan, setPlan] = createSignal<Plan | null>(null);
   const [error, setError] = createSignal("");
   const [json, setJson] = createSignal(exampleService);
@@ -134,6 +135,7 @@ export function Workspace() {
         <h2>{ws()?.name ?? "…"}</h2>
         <For each={ws()?.environments ?? []}>{(e) => <span class={`pill ${envTone(e)}`}>{envLabel(e)}</span>}</For>
         <span class="muted small mono">{ws()?.unixUser} · uid {ws()?.uid}</span>
+        <Show when={ws()}>{(w) => <span class="muted small mono" title="host ports this workspace may publish on">ports {w().portBlockStart}–{w().portBlockStart + w().portBlockSize - 1}</span>}</Show>
         <span style={{ "margin-left": "auto" }} />
         <For each={missingEnvs()}>{(e) => <button onClick={() => planAddEnv(e)}>Add {envLabel(e)}</button>}</For>
         <button onClick={() => { refetch(); refetchStatus(); }}>Refresh</button>
@@ -198,7 +200,7 @@ export function Workspace() {
           <span style={{ "margin-left": "auto" }} />
           <button type="button" onClick={() => setAdvanced(!advanced())}>{advanced() ? "Simple form" : "JSON"}</button>
         </div>
-        <Show when={advanced()} fallback={<ServiceForm secretNames={secretList()?.filter((s) => s.environment === Env.UNSPECIFIED || s.environment === envForNew()).map((s) => s.name)} onSubmit={planUpsert} />}>
+        <Show when={advanced()} fallback={<ServiceForm secretNames={secretList()?.filter((s) => s.environment === Env.UNSPECIFIED || s.environment === envForNew()).map((s) => s.name)} ports={ports()} onSubmit={planUpsert} />}>
           <form onSubmit={planUpsertJson} style={{ display: "grid", gap: "10px" }}>
             <span class="muted small">Definition in the API's JSON shape. Secret names must exist in the target environment (or be shared) first.</span>
             <textarea id="svc-json" class="mono" value={json()} onInput={(e) => setJson(e.currentTarget.value)} spellcheck={false} />
@@ -283,7 +285,7 @@ export function Workspace() {
         onClose={() => setPlan(null)}
         onApplied={() => {
           if (plan()?.changes.some((c) => c.kind === 2 /* DELETE_USER */)) navigate("/");
-          else { refetch(); refetchStatus(); }
+          else { refetch(); refetchStatus(); refetchPorts(); }
         }}
       />
     </>

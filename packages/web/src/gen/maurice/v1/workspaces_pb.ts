@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file maurice/v1/workspaces.proto.
  */
 export const file_maurice_v1_workspaces: GenFile = /*@__PURE__*/
-  fileDesc("ChttYXVyaWNlL3YxL3dvcmtzcGFjZXMucHJvdG8SCm1hdXJpY2UudjEitwEKCVdvcmtzcGFjZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCXVuaXhfdXNlchgDIAEoCRILCgN1aWQYBCABKA0SFAoMc3VidWlkX3N0YXJ0GAUgASgNEhIKCnN1YnVpZF9sZW4YBiABKA0SDAoEaG9tZRgHIAEoCRIlCgxlbnZpcm9ubWVudHMYCCADKA4yDy5tYXVyaWNlLnYxLkVudhIRCgljcHVfc2xpY2UYCSABKAkiFwoVTGlzdFdvcmtzcGFjZXNSZXF1ZXN0IkMKFkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USKQoKd29ya3NwYWNlcxgBIAMoCzIVLm1hdXJpY2UudjEuV29ya3NwYWNlIiEKE0dldFdvcmtzcGFjZVJlcXVlc3QSCgoCaWQYASABKAkiUQoaUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIlCgxlbnZpcm9ubWVudHMYAiADKA4yDy5tYXVyaWNlLnYxLkVudiJXChlQbGFuQWRkRW52aXJvbm1lbnRSZXF1ZXN0EhQKDHdvcmtzcGFjZV9pZBgBIAEoCRIkCgtlbnZpcm9ubWVudBgCIAEoDjIPLm1hdXJpY2UudjEuRW52IjcKGlBsYW5EZWxldGVXb3Jrc3BhY2VSZXF1ZXN0EgoKAmlkGAEgASgJEg0KBXB1cmdlGAIgASgIMvkCCgpXb3Jrc3BhY2VzEk0KBExpc3QSIS5tYXVyaWNlLnYxLkxpc3RXb3Jrc3BhY2VzUmVxdWVzdBoiLm1hdXJpY2UudjEuTGlzdFdvcmtzcGFjZXNSZXNwb25zZRI9CgNHZXQSHy5tYXVyaWNlLnYxLkdldFdvcmtzcGFjZVJlcXVlc3QaFS5tYXVyaWNlLnYxLldvcmtzcGFjZRJGCgpQbGFuQ3JlYXRlEiYubWF1cmljZS52MS5QbGFuQ3JlYXRlV29ya3NwYWNlUmVxdWVzdBoQLm1hdXJpY2UudjEuUGxhbhJNChJQbGFuQWRkRW52aXJvbm1lbnQSJS5tYXVyaWNlLnYxLlBsYW5BZGRFbnZpcm9ubWVudFJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4SRgoKUGxhbkRlbGV0ZRImLm1hdXJpY2UudjEuUGxhbkRlbGV0ZVdvcmtzcGFjZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW5iBnByb3RvMw", [file_maurice_v1_common]);
+  fileDesc("ChttYXVyaWNlL3YxL3dvcmtzcGFjZXMucHJvdG8SCm1hdXJpY2UudjEi6gEKCVdvcmtzcGFjZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCXVuaXhfdXNlchgDIAEoCRILCgN1aWQYBCABKA0SFAoMc3VidWlkX3N0YXJ0GAUgASgNEhIKCnN1YnVpZF9sZW4YBiABKA0SDAoEaG9tZRgHIAEoCRIlCgxlbnZpcm9ubWVudHMYCCADKA4yDy5tYXVyaWNlLnYxLkVudhIRCgljcHVfc2xpY2UYCSABKAkSGAoQcG9ydF9ibG9ja19zdGFydBgKIAEoDRIXCg9wb3J0X2Jsb2NrX3NpemUYCyABKA0iFwoVTGlzdFdvcmtzcGFjZXNSZXF1ZXN0IkMKFkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USKQoKd29ya3NwYWNlcxgBIAMoCzIVLm1hdXJpY2UudjEuV29ya3NwYWNlIiEKE0dldFdvcmtzcGFjZVJlcXVlc3QSCgoCaWQYASABKAkiagoaUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QSDAoEbmFtZRgBIAEoCRIlCgxlbnZpcm9ubWVudHMYAiADKA4yDy5tYXVyaWNlLnYxLkVudhIXCg9wb3J0X2Jsb2NrX3NpemUYAyABKA0iJwoPR2V0UG9ydHNSZXF1ZXN0EhQKDHdvcmtzcGFjZV9pZBgBIAEoCSJlCghVc2VkUG9ydBIPCgdob3N0X2lwGAEgASgJEhEKCWhvc3RfcG9ydBgCIAEoDRIkCgtlbnZpcm9ubWVudBgDIAEoDjIPLm1hdXJpY2UudjEuRW52Eg8KB3NlcnZpY2UYBCABKAkicAoOV29ya3NwYWNlUG9ydHMSEwoLYmxvY2tfc3RhcnQYASABKA0SEgoKYmxvY2tfc2l6ZRgCIAEoDRIiCgR1c2VkGAMgAygLMhQubWF1cmljZS52MS5Vc2VkUG9ydBIRCgluZXh0X2ZyZWUYBCABKA0iVwoZUGxhbkFkZEVudmlyb25tZW50UmVxdWVzdBIUCgx3b3Jrc3BhY2VfaWQYASABKAkSJAoLZW52aXJvbm1lbnQYAiABKA4yDy5tYXVyaWNlLnYxLkVudiI3ChpQbGFuRGVsZXRlV29ya3NwYWNlUmVxdWVzdBIKCgJpZBgBIAEoCRINCgVwdXJnZRgCIAEoCDK+AwoKV29ya3NwYWNlcxJNCgRMaXN0EiEubWF1cmljZS52MS5MaXN0V29ya3NwYWNlc1JlcXVlc3QaIi5tYXVyaWNlLnYxLkxpc3RXb3Jrc3BhY2VzUmVzcG9uc2USPQoDR2V0Eh8ubWF1cmljZS52MS5HZXRXb3Jrc3BhY2VSZXF1ZXN0GhUubWF1cmljZS52MS5Xb3Jrc3BhY2USQwoIR2V0UG9ydHMSGy5tYXVyaWNlLnYxLkdldFBvcnRzUmVxdWVzdBoaLm1hdXJpY2UudjEuV29ya3NwYWNlUG9ydHMSRgoKUGxhbkNyZWF0ZRImLm1hdXJpY2UudjEuUGxhbkNyZWF0ZVdvcmtzcGFjZVJlcXVlc3QaEC5tYXVyaWNlLnYxLlBsYW4STQoSUGxhbkFkZEVudmlyb25tZW50EiUubWF1cmljZS52MS5QbGFuQWRkRW52aXJvbm1lbnRSZXF1ZXN0GhAubWF1cmljZS52MS5QbGFuEkYKClBsYW5EZWxldGUSJi5tYXVyaWNlLnYxLlBsYW5EZWxldGVXb3Jrc3BhY2VSZXF1ZXN0GhAubWF1cmljZS52MS5QbGFuYgZwcm90bzM", [file_maurice_v1_common]);
 
 /**
  * @generated from message maurice.v1.Workspace
@@ -64,6 +64,18 @@ export type Workspace = Message<"maurice.v1.Workspace"> & {
    * @generated from field: string cpu_slice = 9;
    */
   cpuSlice: string;
+
+  /**
+   * Host ports the workspace may bind: [port_block_start, port_block_start + port_block_size).
+   *
+   * @generated from field: uint32 port_block_start = 10;
+   */
+  portBlockStart: number;
+
+  /**
+   * @generated from field: uint32 port_block_size = 11;
+   */
+  portBlockSize: number;
 };
 
 /**
@@ -135,6 +147,13 @@ export type PlanCreateWorkspaceRequest = Message<"maurice.v1.PlanCreateWorkspace
    * @generated from field: repeated maurice.v1.Env environments = 2;
    */
   environments: Env[];
+
+  /**
+   * 100, 500 or 1000 host ports; 0 = 500.
+   *
+   * @generated from field: uint32 port_block_size = 3;
+   */
+  portBlockSize: number;
 };
 
 /**
@@ -143,6 +162,91 @@ export type PlanCreateWorkspaceRequest = Message<"maurice.v1.PlanCreateWorkspace
  */
 export const PlanCreateWorkspaceRequestSchema: GenMessage<PlanCreateWorkspaceRequest> = /*@__PURE__*/
   messageDesc(file_maurice_v1_workspaces, 4);
+
+/**
+ * @generated from message maurice.v1.GetPortsRequest
+ */
+export type GetPortsRequest = Message<"maurice.v1.GetPortsRequest"> & {
+  /**
+   * @generated from field: string workspace_id = 1;
+   */
+  workspaceId: string;
+};
+
+/**
+ * Describes the message maurice.v1.GetPortsRequest.
+ * Use `create(GetPortsRequestSchema)` to create a new message.
+ */
+export const GetPortsRequestSchema: GenMessage<GetPortsRequest> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_workspaces, 5);
+
+/**
+ * @generated from message maurice.v1.UsedPort
+ */
+export type UsedPort = Message<"maurice.v1.UsedPort"> & {
+  /**
+   * @generated from field: string host_ip = 1;
+   */
+  hostIp: string;
+
+  /**
+   * @generated from field: uint32 host_port = 2;
+   */
+  hostPort: number;
+
+  /**
+   * @generated from field: maurice.v1.Env environment = 3;
+   */
+  environment: Env;
+
+  /**
+   * @generated from field: string service = 4;
+   */
+  service: string;
+};
+
+/**
+ * Describes the message maurice.v1.UsedPort.
+ * Use `create(UsedPortSchema)` to create a new message.
+ */
+export const UsedPortSchema: GenMessage<UsedPort> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_workspaces, 6);
+
+/**
+ * The workspace's port block and what is bound inside it.
+ *
+ * @generated from message maurice.v1.WorkspacePorts
+ */
+export type WorkspacePorts = Message<"maurice.v1.WorkspacePorts"> & {
+  /**
+   * @generated from field: uint32 block_start = 1;
+   */
+  blockStart: number;
+
+  /**
+   * @generated from field: uint32 block_size = 2;
+   */
+  blockSize: number;
+
+  /**
+   * @generated from field: repeated maurice.v1.UsedPort used = 3;
+   */
+  used: UsedPort[];
+
+  /**
+   * Lowest unused port of the block; 0 when the block is full.
+   *
+   * @generated from field: uint32 next_free = 4;
+   */
+  nextFree: number;
+};
+
+/**
+ * Describes the message maurice.v1.WorkspacePorts.
+ * Use `create(WorkspacePortsSchema)` to create a new message.
+ */
+export const WorkspacePortsSchema: GenMessage<WorkspacePorts> = /*@__PURE__*/
+  messageDesc(file_maurice_v1_workspaces, 7);
 
 /**
  * @generated from message maurice.v1.PlanAddEnvironmentRequest
@@ -164,7 +268,7 @@ export type PlanAddEnvironmentRequest = Message<"maurice.v1.PlanAddEnvironmentRe
  * Use `create(PlanAddEnvironmentRequestSchema)` to create a new message.
  */
 export const PlanAddEnvironmentRequestSchema: GenMessage<PlanAddEnvironmentRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_workspaces, 5);
+  messageDesc(file_maurice_v1_workspaces, 8);
 
 /**
  * @generated from message maurice.v1.PlanDeleteWorkspaceRequest
@@ -188,7 +292,7 @@ export type PlanDeleteWorkspaceRequest = Message<"maurice.v1.PlanDeleteWorkspace
  * Use `create(PlanDeleteWorkspaceRequestSchema)` to create a new message.
  */
 export const PlanDeleteWorkspaceRequestSchema: GenMessage<PlanDeleteWorkspaceRequest> = /*@__PURE__*/
-  messageDesc(file_maurice_v1_workspaces, 6);
+  messageDesc(file_maurice_v1_workspaces, 9);
 
 /**
  * @generated from service maurice.v1.Workspaces
@@ -213,6 +317,16 @@ export const Workspaces: GenService<{
     methodKind: "unary";
     input: typeof GetWorkspaceRequestSchema;
     output: typeof WorkspaceSchema;
+  },
+  /**
+   * scope: read. Port block, bindings inside it and the next free port.
+   *
+   * @generated from rpc maurice.v1.Workspaces.GetPorts
+   */
+  getPorts: {
+    methodKind: "unary";
+    input: typeof GetPortsRequestSchema;
+    output: typeof WorkspacePortsSchema;
   },
   /**
    * scope: plan

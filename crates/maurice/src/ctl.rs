@@ -19,7 +19,12 @@ pub enum WorkspaceCommand {
         /// Environments to create: dev, staging, prod. Repeat the flag; default dev and prod.
         #[arg(long = "env", value_name = "ENV")]
         envs: Vec<String>,
+        /// Host ports reserved for the workspace: 100, 500 or 1000.
+        #[arg(long, default_value_t = 500)]
+        block_size: u32,
     },
+    /// Show the port block of a workspace, what is bound in it and the next free port.
+    Ports { id: String },
     /// Plan adding an environment (and its network) to a workspace.
     AddEnv {
         id: String,
@@ -227,12 +232,14 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
                     .map(|e| env_label(e.as_known()))
                     .collect();
                 println!(
-                    "{:<36} {:<16} {:<18} {:<12} uid {:<6} subuid {}+{}  {}",
+                    "{:<36} {:<16} {:<18} {:<12} uid {:<6} ports {}-{}  subuid {}+{}  {}",
                     w.id,
                     w.name,
                     envs.join(","),
                     w.unix_user,
                     w.uid,
+                    w.port_block_start,
+                    w.port_block_start + w.port_block_size - 1,
                     w.subuid_start,
                     w.subuid_len,
                     w.home
@@ -249,7 +256,11 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
                 .into_owned();
             print_json(&w)?;
         }
-        WorkspaceCommand::Create { name, envs } => {
+        WorkspaceCommand::Create {
+            name,
+            envs,
+            block_size,
+        } => {
             let environments = envs
                 .iter()
                 .map(|e| parse_env(e).map(Into::into))
@@ -258,11 +269,41 @@ pub async fn workspace(cmd: WorkspaceCommand, server: &str, _tier: Tier) -> anyh
                 .plan_create(PlanCreateWorkspaceRequest {
                     name,
                     environments,
+                    port_block_size: block_size,
                     ..Default::default()
                 })
                 .await?
                 .into_owned();
             print_plan(&p);
+        }
+        WorkspaceCommand::Ports { id } => {
+            let p = client
+                .get_ports(GetPortsRequest {
+                    workspace_id: id,
+                    ..Default::default()
+                })
+                .await?
+                .into_owned();
+            println!(
+                "block {}-{} ({} ports), next free {}",
+                p.block_start,
+                p.block_start + p.block_size - 1,
+                p.block_size,
+                if p.next_free == 0 {
+                    "none".to_string()
+                } else {
+                    p.next_free.to_string()
+                }
+            );
+            for u in &p.used {
+                println!(
+                    "  {}:{:<6} {:<8} {}",
+                    u.host_ip,
+                    u.host_port,
+                    env_label(u.environment.as_known()),
+                    u.service
+                );
+            }
         }
         WorkspaceCommand::AddEnv { id, env } => {
             let p = client

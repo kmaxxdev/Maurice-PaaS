@@ -79,6 +79,16 @@ pub fn validate_workspace(ws: &Workspace) -> Vec<Finding> {
             if let Some(pubd) = p.published {
                 let key = format!("{}:{}", pubd.host_ip, pubd.host_port);
                 let who = format!("{env}/{}", s.name);
+                if !ws.port_block.contains(pubd.host_port) {
+                    findings.push(Finding::error(
+                        "port.outside_block",
+                        format!("port:{key}"),
+                        format!(
+                            "'{who}' publishes {} but the workspace owns ports {}",
+                            pubd.host_port, ws.port_block
+                        ),
+                    ));
+                }
                 if let Some(other) = bound.insert(key.clone(), who.clone()) {
                     findings.push(Finding::error(
                         "port.conflict",
@@ -248,6 +258,10 @@ mod tests {
             subuid_len: 65536,
             home: "/srv/ws/shop".into(),
             cpu_slice: None,
+            port_block: PortBlock {
+                start: 8000,
+                size: 1000,
+            },
             environments: envs
                 .into_iter()
                 .map(|(env, services)| Environment {
@@ -379,6 +393,34 @@ mod tests {
             (Env::Prod, vec![a]),
         ]));
         assert!(f.iter().any(|x| x.code == "port.conflict"), "{f:?}");
+    }
+
+    #[test]
+    fn host_port_outside_the_block_is_an_error() {
+        let mut a = svc("web");
+        a.ports.push(Port {
+            container_port: 80,
+            published: Some(Published {
+                host_ip: Ipv4Addr::LOCALHOST.into(),
+                host_port: 18080,
+            }),
+        });
+        let f = validate_workspace(&ws(vec![a]));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].code, "port.outside_block");
+        assert!(f[0].message.contains("8000-8999"));
+    }
+
+    #[test]
+    fn port_block_bounds() {
+        let b = PortBlock {
+            start: 21000,
+            size: 500,
+        };
+        assert_eq!(b.end(), 21499);
+        assert!(b.contains(21000) && b.contains(21499));
+        assert!(!b.contains(20999) && !b.contains(21500));
+        assert_eq!(b.to_string(), "21000-21499");
     }
 
     #[test]
